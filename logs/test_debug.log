@@ -1,0 +1,176 @@
+
+==============================================================================
+ Two-level debug control: compile time + run time
+==============================================================================
+date     : 2026-11-08 18:12:44
+compiler : gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+
+==============================================================================
+ Part 1 - compile time: make DEBUG=0 vs make DEBUG=1
+==============================================================================
+
+--- make clean && make DEBUG=0 all   (release) ---
+make[1]: Entering directory '/mnt/c/Users/USER/OneDrive/桌面/C語言期中實作'
+gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -fPIC -shared -o libutils.so utils.c
+gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -o server server.c -L. -Wl,-rpath,'$ORIGIN' -lutils
+gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -o client client.c -L. -Wl,-rpath,'$ORIGIN' -lutils
+make[1]: Leaving directory '/mnt/c/Users/USER/OneDrive/桌面/C語言期中實作'
+
+--- make DEBUG=1 all   (debug, the default) ---
+make[1]: Entering directory '/mnt/c/Users/USER/OneDrive/桌面/C語言期中實作'
+gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -DENABLE_DEBUG -fPIC -shared -o libutils.so utils.c
+gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -DENABLE_DEBUG -o server server.c -L. -Wl,-rpath,'$ORIGIN' -lutils
+gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -DENABLE_DEBUG -o client client.c -L. -Wl,-rpath,'$ORIGIN' -lutils
+make[1]: Leaving directory '/mnt/c/Users/USER/OneDrive/桌面/C語言期中實作'
+
+--- Debug-only format strings in server + libutils.so (strings | grep) ---
+release build: 0
+debug build  : 5
+    %s: child started
+    %s: push #%u sent
+    TX %s(0x%02X) body_len=%u
+    read_n: interrupted by a signal (EINTR), retrying
+    RX header magic=0x%04X ver=%u op=%s(0x%02X) body_len=%u
+
+--- call instructions inside proto_send() (objdump -d libutils.so) ---
+release build:
+    call   24d0 <write_n@plt>
+    call   22f0 <__errno_location@plt>
+    call   23a0 <__stack_chk_fail@plt>
+debug build:
+    call   2500 <write_n@plt>
+    call   24c0 <proto_opcode_name@plt>
+    call   2590 <log_write@plt>
+    call   2550 <log_hexdump@plt>
+    call   2310 <__errno_location@plt>
+    call   23c0 <__stack_chk_fail@plt>
+
+--- Code size (size, bytes) ---
+   text	   data	    bss	    dec	    hex	filename
+  15944	    880	      8	  16832	   41c0	release/libutils.so
+  17740	    904	      8	  18652	   48dc	debug/libutils.so
+  20571	   1664	   6312	  28547	   6f83	release/server
+  21133	   1672	   6312	  29117	   71bd	debug/server
+
+--- Release build run with -d 2 (server and client) ---
+$ ./server -p 19590 -d 2      (release build)
+server log:
+    18:12:48.395 [server:12912] WARN  built without -DENABLE_DEBUG: -d 2 has no effect
+    18:12:48.396 [server:12912] INFO  NP SysInfo server pid 12912 listening on 0.0.0.0:19590
+    18:12:48.399 [server:12912] INFO  robustness: [1] SIGCHLD reaping ON | [2] SIGPIPE ignored ON | [3] header validation ON, socket timeout 5s
+    18:12:48.401 [server:12912] INFO  robustness: [4] connection limit 128 total, off per IP | [5] request deadline 5s | [6] stream framing ON | [7] heartbeat ON | [9] die with parent ON
+    18:12:48.402 [server:12912] INFO  debug logs: compile-time compiled out, runtime level 2
+    18:12:48.404 [server:12912] INFO  accepted 127.0.0.1:36806 -> child pid 12917 (connection #1) | active=1
+    18:12:48.404 [server:12917] INFO  127.0.0.1:36806: client closed the connection after 1 request(s)
+    18:12:48.406 [server:12912] INFO  reaped child 12917: exit 0 (client closed normally) | active=0
+    18:12:48.708 [server:12912] INFO  shut down: 1 connection(s) served, 0 rejected, 0 child(ren) not reaped
+client output:
+    18:12:48.404 [client:12916] WARN  built without -DENABLE_DEBUG: -d 2 has no effect
+    seq=0   pid=12917  host=LAPTOP-0F0NVT4H up=0d 01:08:38 load=0.15/0.06/0.01 mem_avail=7.08 GiB/7.61 GiB
+
+==============================================================================
+ Part 2 - run time: debug build with -d 0 / -d 1 / -d 2
+==============================================================================
+
+--- ./server -d 0, one client request ---
+$ ./server -p 19590 -d 0      (debug build)
+18:12:48.737 [server:12925] INFO  NP SysInfo server pid 12925 listening on 0.0.0.0:19590
+18:12:48.738 [server:12925] INFO  robustness: [1] SIGCHLD reaping ON | [2] SIGPIPE ignored ON | [3] header validation ON, socket timeout 5s
+18:12:48.739 [server:12925] INFO  robustness: [4] connection limit 128 total, off per IP | [5] request deadline 5s | [6] stream framing ON | [7] heartbeat ON | [9] die with parent ON
+18:12:48.739 [server:12925] INFO  debug logs: compile-time ENABLED, runtime level 0
+18:12:48.742 [server:12925] INFO  accepted 127.0.0.1:36812 -> child pid 12930 (connection #1) | active=1
+18:12:48.742 [server:12930] INFO  127.0.0.1:36812: client closed the connection after 1 request(s)
+18:12:48.743 [server:12925] INFO  reaped child 12930: exit 0 (client closed normally) | active=0
+18:12:49.045 [server:12925] INFO  shut down: 1 connection(s) served, 0 rejected, 0 child(ren) not reaped
+
+--- ./server -d 1, one client request ---
+$ ./server -p 19590 -d 1      (debug build)
+18:12:49.087 [server:12938] INFO  NP SysInfo server pid 12938 listening on 0.0.0.0:19590
+18:12:49.088 [server:12938] INFO  robustness: [1] SIGCHLD reaping ON | [2] SIGPIPE ignored ON | [3] header validation ON, socket timeout 5s
+18:12:49.088 [server:12938] INFO  robustness: [4] connection limit 128 total, off per IP | [5] request deadline 5s | [6] stream framing ON | [7] heartbeat ON | [9] die with parent ON
+18:12:49.089 [server:12938] INFO  debug logs: compile-time ENABLED, runtime level 1
+18:12:49.092 [server:12938] INFO  accepted 127.0.0.1:36824 -> child pid 12943 (connection #1) | active=1
+18:12:49.092 [server:12943] DEBUG server.c:671: 127.0.0.1:36824: child started
+18:12:49.093 [server:12943] DEBUG server.c:463: 127.0.0.1:36824: SYSINFO_REQ
+18:12:49.094 [server:12943] DEBUG utils.c:502: sysinfo: host=LAPTOP-0F0NVT4H uptime=4119s load1=0.15 mem_avail=7417108/7976576 kB
+18:12:49.095 [server:12943] DEBUG utils.c:282: peer closed after 0/1 bytes
+18:12:49.095 [server:12943] INFO  127.0.0.1:36824: client closed the connection after 1 request(s)
+18:12:49.096 [server:12938] INFO  reaped child 12943: exit 0 (client closed normally) | active=0
+18:12:49.400 [server:12938] INFO  shut down: 1 connection(s) served, 0 rejected, 0 child(ren) not reaped
+
+--- ./server -d 2, one client request ---
+$ ./server -p 19590 -d 2      (debug build)
+18:12:49.445 [server:12951] INFO  NP SysInfo server pid 12951 listening on 0.0.0.0:19590
+18:12:49.446 [server:12951] INFO  robustness: [1] SIGCHLD reaping ON | [2] SIGPIPE ignored ON | [3] header validation ON, socket timeout 5s
+18:12:49.451 [server:12951] INFO  robustness: [4] connection limit 128 total, off per IP | [5] request deadline 5s | [6] stream framing ON | [7] heartbeat ON | [9] die with parent ON
+18:12:49.452 [server:12951] INFO  debug logs: compile-time ENABLED, runtime level 2
+18:12:49.456 [server:12951] INFO  accepted 127.0.0.1:36840 -> child pid 12956 (connection #1) | active=1
+18:12:49.456 [server:12956] DEBUG server.c:671: 127.0.0.1:36840: child started
+18:12:49.458 [server:12956] DEBUG utils.c:358: RX header magic=0x4E50 ver=1 op=SYSINFO_REQ(0x01) body_len=0
+18:12:49.459 [server:12956] DEBUG RX header: 8 byte(s)
+18:12:49.459 [server:12956] DEBUG     0000  4e 50 01 01 00 00 00 00                           |NP......|
+18:12:49.460 [server:12956] DEBUG server.c:463: 127.0.0.1:36840: SYSINFO_REQ
+18:12:49.460 [server:12956] DEBUG utils.c:502: sysinfo: host=LAPTOP-0F0NVT4H uptime=4119s load1=0.14 mem_avail=7416888/7976576 kB
+18:12:49.461 [server:12956] DEBUG utils.c:305: TX SYSINFO_RESP(0x81) body_len=120
+18:12:49.461 [server:12956] DEBUG TX packet: 128 byte(s)
+18:12:49.462 [server:12956] DEBUG     0000  4e 50 01 81 00 00 00 78  00 00 32 9c 00 00 00 00  |NP.....x..2.....|
+18:12:49.463 [server:12956] DEBUG     0010  4c 41 50 54 4f 50 2d 30  46 30 4e 56 54 34 48 00  |LAPTOP-0F0NVT4H.|
+18:12:49.464 [server:12956] DEBUG     0020  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
+18:12:49.466 [server:12956] DEBUG     0030  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
+18:12:49.467 [server:12956] DEBUG     0040  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
+18:12:49.468 [server:12956] DEBUG     0050  00 00 00 00 00 00 10 17  00 00 00 00 00 79 b6 80  |.............y..|
+18:12:49.469 [server:12956] DEBUG     0060  00 00 00 00 00 70 6d e0  00 00 00 00 00 71 2c 38  |.....pm......q,8|
+18:12:49.469 [server:12956] DEBUG     0070  00 00 00 0e 00 00 00 06  00 00 00 01 00 00 00 e5  |................|
+18:12:49.477 [server:12956] DEBUG utils.c:282: peer closed after 0/1 bytes
+18:12:49.478 [server:12956] INFO  127.0.0.1:36840: client closed the connection after 1 request(s)
+18:12:49.478 [server:12951] INFO  reaped child 12956: exit 0 (client closed normally) | active=0
+18:12:49.783 [server:12951] INFO  shut down: 1 connection(s) served, 0 rejected, 0 child(ren) not reaped
+
+--- Client side with -d 2 (logs/debug_client_d2.log) ---
+18:12:49.455 [client:12955] DEBUG client.c:235: connected to 127.0.0.1:19590 (fd 3)
+18:12:49.456 [client:12955] DEBUG utils.c:305: TX SYSINFO_REQ(0x01) body_len=0
+18:12:49.457 [client:12955] DEBUG TX packet: 8 byte(s)
+18:12:49.457 [client:12955] DEBUG     0000  4e 50 01 01 00 00 00 00                           |NP......|
+18:12:49.470 [client:12955] DEBUG utils.c:358: RX header magic=0x4E50 ver=1 op=SYSINFO_RESP(0x81) body_len=120
+18:12:49.471 [client:12955] DEBUG RX header: 8 byte(s)
+18:12:49.471 [client:12955] DEBUG     0000  4e 50 01 81 00 00 00 78                           |NP.....x|
+18:12:49.472 [client:12955] DEBUG RX body: 120 byte(s)
+18:12:49.472 [client:12955] DEBUG     0000  00 00 32 9c 00 00 00 00  4c 41 50 54 4f 50 2d 30  |..2.....LAPTOP-0|
+18:12:49.473 [client:12955] DEBUG     0010  46 30 4e 56 54 34 48 00  00 00 00 00 00 00 00 00  |F0NVT4H.........|
+18:12:49.473 [client:12955] DEBUG     0020  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
+18:12:49.474 [client:12955] DEBUG     0030  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
+18:12:49.474 [client:12955] DEBUG     0040  00 00 00 00 00 00 00 00  00 00 00 00 00 00 10 17  |................|
+18:12:49.475 [client:12955] DEBUG     0050  00 00 00 00 00 79 b6 80  00 00 00 00 00 70 6d e0  |.....y.......pm.|
+18:12:49.475 [client:12955] DEBUG     0060  00 00 00 00 00 71 2c 38  00 00 00 0e 00 00 00 06  |.....q,8........|
+18:12:49.476 [client:12955] DEBUG     0070  00 00 00 01 00 00 00 e5                           |........|
+seq=0   pid=12956  host=LAPTOP-0F0NVT4H up=0d 01:08:39 load=0.14/0.06/0.01 mem_avail=7.07 GiB/7.61 GiB
+
+--- Server log lines per runtime level ---
+  level    total   INFO/WARN   DEBUG   packet-trace
+  -d 0         8           8       0              0
+  -d 1        12           8       4              0
+  -d 2        25           8      17             13
+
+==============================================================================
+ Checks
+==============================================================================
+  [PASS] make DEBUG=0 builds all 3 targets without -DENABLE_DEBUG
+  [PASS] make DEBUG=1 builds all 3 targets with -DENABLE_DEBUG
+  [PASS] release binaries contain 0 debug-only format strings
+  [PASS] debug binaries contain them (5 found)
+  [PASS] release proto_send() makes no logger call
+  [PASS] debug proto_send() calls the logger (2 calls)
+  [PASS] release build with -d 2: 0 DEBUG lines from server and client
+  [PASS] release server warns that -d has no effect
+  [PASS] release build still serves the request
+  [PASS] -d 0: INFO lines only, 0 DEBUG lines
+  [PASS] -d 1: verbose DEBUG lines, no packet trace
+  [PASS] -d 1: DEBUG lines carry file:line
+  [PASS] -d 2: packet trace present (13 lines)
+  [PASS] -d 2: hex dump starts with the NP magic (4e 50)
+  [PASS] output grows with the level (8 < 12 < 25 lines)
+
+==============================================================================
+ Result
+==============================================================================
+ALL CHECKS PASSED

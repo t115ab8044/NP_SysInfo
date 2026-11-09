@@ -1,0 +1,111 @@
+
+==== Environment ====
+date     : 2026-11-08 18:11:12
+kernel   : Linux 6.18.33.2-microsoft-standard-WSL2
+compiler : gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+test     : 12 concurrent clients, each holds its connection 4 s
+
+==== Build (make) ====
+./server:
+	libutils.so => /mnt/c/Users/USER/OneDrive/桌面/C語言期中實作/libutils.so (0x000074c26195b000)
+./client:
+	libutils.so => /mnt/c/Users/USER/OneDrive/桌面/C語言期中實作/libutils.so (0x00007cf6a497a000)
+
+==== Start server ====
+$ ./server -p 19590   -> parent PID 11718 (log: logs/concurrent_server.log)
+
+==== Launch 12 clients at the same moment ====
+$ ./client -p 19590 -q --hold 4   x 12 (background)
+client PIDs: 11726 11727 11728 11729 11730 11731 11732 11733 11734 11735 11736 11737
+
+==== ps aux while all 12 clients are connected ====
+USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+user       11718  0.0  0.0   2820  2196 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11726  0.0  0.0   2816  2324 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11727  0.0  0.0   2816  2324 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11728  0.0  0.0   2816  2320 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11729  0.0  0.0   2816  2324 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11730  0.0  0.0   2816  2320 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11731  0.0  0.0   2816  2252 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11732  0.0  0.0   2816  2324 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11733  0.0  0.0   2816  2272 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11734  0.0  0.0   2816  2324 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11735  0.0  0.0   2816  2320 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11736  0.0  0.0   2816  2320 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11737  0.0  0.0   2816  2324 pts/3    S+   18:11   0:00 ./client -p 19590 -q --hold 4
+user       11739  0.0  0.0   2820  1644 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11740  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11741  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11742  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11743  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11744  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11745  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11746  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11747  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11748  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11749  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+user       11750  0.0  0.0   2820  1648 pts/3    S+   18:11   0:00 ./server -p 19590
+
+==== Server process tree (every child's PPID = 11718) ====
+    PID    PPID STAT     ELAPSED CMD
+  11718   11690 S+         00:01 ./server -p 19590
+  11739   11718 S+         00:01  \_ ./server -p 19590
+  11740   11718 S+         00:01  \_ ./server -p 19590
+  11741   11718 S+         00:01  \_ ./server -p 19590
+  11742   11718 S+         00:01  \_ ./server -p 19590
+  11743   11718 S+         00:01  \_ ./server -p 19590
+  11744   11718 S+         00:01  \_ ./server -p 19590
+  11745   11718 S+         00:01  \_ ./server -p 19590
+  11746   11718 S+         00:01  \_ ./server -p 19590
+  11747   11718 S+         00:01  \_ ./server -p 19590
+  11748   11718 S+         00:01  \_ ./server -p 19590
+  11749   11718 S+         00:01  \_ ./server -p 19590
+  11750   11718 S+         00:01  \_ ./server -p 19590
+server children alive           : 12
+established TCP conns on :19590  : 12
+
+==== Client results (pid= is the server child that answered) ====
+[client 01] seq=0   pid=11743  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 02] seq=0   pid=11742  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 03] seq=0   pid=11748  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 04] seq=0   pid=11745  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 05] seq=0   pid=11749  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 06] seq=0   pid=11740  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 07] seq=0   pid=11746  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 08] seq=0   pid=11741  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 09] seq=0   pid=11739  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 10] seq=0   pid=11744  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 11] seq=0   pid=11747  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+[client 12] seq=0   pid=11750  host=LAPTOP-0F0NVT4H up=0d 01:07:03 load=0.04/0.05/0.01 mem_avail=7.09 GiB/7.61 GiB
+clients exited 0: 12 / 12, distinct server PIDs: 12
+after the clients left: 0 child process(es), 0 zombie(s)
+server log: 12 accepted, 12 reaped
+
+==== Bonus: built-in stress mode (100 worker processes x 10 requests) ====
+$ ./client -p 19590 --stress 100 -n 10
+18:11:18.171 [client:11809] INFO  stress: forking 100 worker process(es) x 10 request(s) against 127.0.0.1:19590
+
+===== Stress test: 100 worker process(es) x 10 request(s) =====
+  Requests     : 1000 ok, 0 failed (100.0 % success)
+  Latency (ms) : avg 6.480 | p50 0.104 | p95 65.367 | p99 105.165 | max 116.462
+  Wall time    : 0.135 s (7387.5 ok req/s)
+  Server PIDs  : 100 distinct fork()ed server children
+  Workers      : 100 exited ok, 0 failed
+
+==== Stop server (SIGTERM) ====
+server exit status: 0
+18:11:18.352 [server:11718] INFO  shut down: 112 connection(s) served, 0 rejected, 0 child(ren) not reaped
+
+==== Checks ====
+  [PASS] 12 server children alive at the same time (ps --ppid)
+  [PASS] ps aux shows 1 parent + 12 children = 13 ./server processes
+  [PASS] 12 established TCP connections at the same time
+  [PASS] all 12 clients exited successfully
+  [PASS] clients were answered by 12 distinct server PIDs
+  [PASS] every answering PID is a child seen in the ps snapshot
+  [PASS] no zombie or leftover children after the clients left
+  [PASS] server log: all 12 accepted children reported as reaped
+  [PASS] stress run: all 1000 requests succeeded
+
+==== Result ====
+ALL CHECKS PASSED

@@ -1,0 +1,421 @@
+
+==============================================================================
+ Robustness test: WITHOUT vs WITH
+==============================================================================
+date      : 2026-11-08 23:34:53
+kernel    : Linux 6.18.33.2-microsoft-standard-WSL2
+compiler  : gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+overcommit: vm.overcommit_memory=0
+
+==============================================================================
+ [1] Zombie prevention: SIGCHLD handler + waitpid(-1, ..., WNOHANG)
+==============================================================================
+Scenario: 12 clients each make one request and leave.
+
+--- WITHOUT ---
+$ ./server -p 9090 --no-sigchld
+12 clients done (12 exited 0). Server children 1 s later:
+    PID    PPID STAT    VSZ   RSS     ELAPSED CMD
+  26083   26063 Z+        0     0       00:01 [server] <defunct>
+  26084   26063 Z+        0     0       00:01 [server] <defunct>
+  26085   26063 Z+        0     0       00:01 [server] <defunct>
+  26086   26063 Z+        0     0       00:01 [server] <defunct>
+  26087   26063 Z+        0     0       00:01 [server] <defunct>
+  26088   26063 Z+        0     0       00:01 [server] <defunct>
+  26089   26063 Z+        0     0       00:01 [server] <defunct>
+  26090   26063 Z+        0     0       00:01 [server] <defunct>
+  26091   26063 Z+        0     0       00:01 [server] <defunct>
+  26092   26063 Z+        0     0       00:01 [server] <defunct>
+  26093   26063 Z+        0     0       00:01 [server] <defunct>
+  26094   26063 Z+        0     0       00:01 [server] <defunct>
+ps aux | grep defunct:
+USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+user       26083  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26084  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26085  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26086  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26087  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26088  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26089  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26090  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26091  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26092  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26093  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+user       26094  0.0  0.0      0     0 pts/4    Z+   23:34   0:00 [server] <defunct>
+zombie children: 12 | 'reaped child' lines in server log: 0
+
+--- WITH ---
+$ ./server -p 9090 
+12 clients done (12 exited 0). Server children 1 s later:
+    PID    PPID STAT    VSZ   RSS     ELAPSED CMD
+  (no child processes)
+ps aux | grep defunct:
+USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+zombie children: 0 | 'reaped child' lines in server log: 12
+
+--- Checks [1] ---
+  [PASS] without: all 12 finished children stay as zombies
+  [PASS] with: 0 zombies, every child reaped
+  [PASS] with: server log reports all 12 reaped children
+
+==============================================================================
+ [2] SIGPIPE: set_signal(SIGPIPE, SIG_IGN) + EPIPE/ECONNRESET in write_n
+==============================================================================
+Scenario: 3 clients subscribe (push every 200 ms) and disconnect after 1 push.
+
+--- WITHOUT ---
+$ ./server -p 9090 --no-sigpipe
+$ ./client --mode abort --abort-after 1   x 3 (subscribe, then disconnect)
+server log, child exits:
+  23:34:56.045 [server:26145] WARN  reaped child 26155: killed by signal 13 (Broken pipe) | active=2
+  23:34:56.047 [server:26145] WARN  reaped child 26156: killed by signal 13 (Broken pipe) | active=1
+  23:34:56.048 [server:26145] WARN  reaped child 26157: killed by signal 13 (Broken pipe) | active=0
+children killed by SIGPIPE: 3 | children that handled EPIPE (exit 4): 0
+server parent alive: yes | next normal client exit status: 0
+
+--- WITH ---
+$ ./server -p 9090 
+$ ./client --mode abort --abort-after 1   x 3 (subscribe, then disconnect)
+server log, child exits:
+  23:34:57.703 [server:26175] WARN  127.0.0.1:45450: push #3 failed: Broken pipe -> client gone, exiting cleanly
+  23:34:57.704 [server:26176] WARN  127.0.0.1:45458: push #3 failed: Broken pipe -> client gone, exiting cleanly
+  23:34:57.705 [server:26165] INFO  reaped child 26175: exit 4 (client gone, EPIPE/ECONNRESET handled) | active=2
+  23:34:57.706 [server:26165] INFO  reaped child 26176: exit 4 (client gone, EPIPE/ECONNRESET handled) | active=1
+  23:34:57.706 [server:26177] WARN  127.0.0.1:45462: push #3 failed: Broken pipe -> client gone, exiting cleanly
+  23:34:57.708 [server:26165] INFO  reaped child 26177: exit 4 (client gone, EPIPE/ECONNRESET handled) | active=0
+children killed by SIGPIPE: 0 | children that handled EPIPE (exit 4): 3
+server parent alive: yes | next normal client exit status: 0
+
+--- Checks [2] ---
+  [PASS] without: 3 children killed by signal 13 (SIGPIPE)
+  [PASS] with: 0 children killed by SIGPIPE
+  [PASS] with: 3 children saw EPIPE and exited cleanly (exit 4)
+  [PASS] with: the server keeps serving new clients
+
+==============================================================================
+ [3] Bad input: header validation (magic 0x4E50) + SO_RCVTIMEO/SO_SNDTIMEO
+==============================================================================
+Scenario: garbage = an HTTP request instead of an NP header
+          biglen  = a valid header claiming body_len = 0xFFFFFFFF
+          idle    = connect and send nothing
+          each client keeps its socket open for 8 s, waiting for a reaction
+
+--- WITHOUT ---
+$ ./server -p 9090 --no-validate --no-timeout
+$ ./client --mode garbage|biglen|idle --hold 8   (3 clients, background)
+6.5 s after connecting (a 5 s timeout would have fired by now), server children:
+    PID    PPID STAT    VSZ   RSS     ELAPSED CMD
+  26196   26185 S+   4197128 1616       00:06 ./server -p 9090 --no-validate --no-timeout
+  26197   26185 S+   774936  1620       00:06 ./server -p 9090 --no-validate --no-timeout
+  26198   26185 S+     2820   832       00:06 ./server -p 9090 --no-validate --no-timeout
+client output:
+  [garbage] 23:34:58.955 [client:26192] INFO  sending 36 bytes of non-NP data (an HTTP request)
+  [garbage] RESULT: no reaction within 8 s - the server child is stuck
+  [biglen] 23:34:58.955 [client:26193] INFO  sending a valid header that claims body_len=4294967295
+  [biglen] RESULT: no reaction within 8 s - the server child is stuck
+  [idle] 23:34:58.956 [client:26194] INFO  connected; sending nothing
+  [idle] RESULT: no reaction within 8 s - the server child is stuck
+server log:
+  23:34:58.955 [server:26196] WARN  127.0.0.1:35732: trusting body_len=4294967295 (validation disabled)
+  23:34:58.956 [server:26197] WARN  127.0.0.1:35730: trusting body_len=790644820 (validation disabled)
+  23:35:07.020 [server:26185] INFO  reaped child 26196: exit 1 (I/O error) | active=2
+  23:35:07.021 [server:26185] INFO  reaped child 26197: exit 1 (I/O error) | active=1
+  23:35:07.022 [server:26185] INFO  reaped child 26198: exit 0 (client closed normally) | active=0
+children still alive at 6.5 s: 3 | clients with no reaction: 3 | clients answered: 0
+
+--- WITH ---
+$ ./server -p 9090 -t 5
+$ ./client --mode garbage|biglen|idle --hold 8   (3 clients, background)
+6.5 s after connecting (a 5 s timeout would have fired by now), server children:
+    PID    PPID STAT    VSZ   RSS     ELAPSED CMD
+  (no child processes)
+client output:
+  [garbage] 23:35:07.166 [client:26219] INFO  sending 36 bytes of non-NP data (an HTTP request)
+  [garbage] RESULT: server rejected the request after 0.00 s: error 1 (bad magic number)
+  [biglen] 23:35:07.167 [client:26220] INFO  sending a valid header that claims body_len=4294967295
+  [biglen] RESULT: server rejected the request after 0.00 s: error 3 (body length exceeds limit)
+  [idle] 23:35:07.166 [client:26221] INFO  connected; sending nothing
+  [idle] RESULT: server closed the connection after 5.23 s
+server log:
+  23:35:07.167 [server:26224] WARN  127.0.0.1:35754: rejected header: bad magic number (magic=0x4745 ver=84 op=0x20 body_len=790644820)
+  23:35:07.168 [server:26225] WARN  127.0.0.1:35766: rejected header: body length exceeds limit (magic=0x4E50 ver=1 op=0x01 body_len=4294967295)
+  23:35:07.170 [server:26212] INFO  reaped child 26224: exit 3 (bad request rejected) | active=2
+  23:35:07.171 [server:26212] INFO  reaped child 26225: exit 3 (bad request rejected) | active=1
+  23:35:12.394 [server:26223] WARN  127.0.0.1:35756: no request within 5 s, closing (SO_RCVTIMEO)
+  23:35:12.396 [server:26212] INFO  reaped child 26223: exit 2 (socket timeout) | active=0
+children still alive at 6.5 s: 0 | clients with no reaction: 0 | clients answered: 3
+
+--- Checks [3] ---
+  [PASS] without: 3 children still blocked after 6.5 s
+  [PASS] without: no client got any reaction within 8 s
+  [PASS] with: 0 children left after 6.5 s
+  [PASS] with: every client got a reaction (error reply or close)
+
+==============================================================================
+ [1b] Signals do not queue: waitpid() in a loop vs once per SIGCHLD
+==============================================================================
+Scenario: 30 clients make one request each and leave at nearly the same time.
+
+--- WITHOUT ---
+$ ./server -p 9090 --single-wait
+30 clients done. Zombie children 1 s later (first lines):
+    PID    PPID STAT CMD
+  26264   26237 Z+   [server] <defunct>
+  26267   26237 Z+   [server] <defunct>
+  26274   26237 Z+   [server] <defunct>
+  26279   26237 Z+   [server] <defunct>
+  26281   26237 Z+   [server] <defunct>
+zombie children: 28 | children reaped by the handler: 2/30
+
+--- WITH ---
+$ ./server -p 9090 
+30 clients done. Zombie children 1 s later (first lines):
+    PID    PPID STAT CMD
+zombie children: 0 | children reaped by the handler: 30/30
+
+--- Checks [1b] ---
+  [PASS] without: coalesced SIGCHLDs leave zombies behind
+  [PASS] with: 0 zombies
+
+==============================================================================
+ [4] Connection limit: total cap + per-client-address cap
+==============================================================================
+Scenario: 20 idle clients from 127.0.0.1 flood the server, then an ordinary
+          client connects from 127.0.0.2 (all of 127.0.0.0/8 is this host).
+
+--- WITHOUT: ./server --no-limit ---
+$ ./server -p 9090 --no-limit
+$ ./client --mode idle --hold 3   x 20 from 127.0.0.1 (one host floods the server)
+server children 1 s later: 20
+$ ./client --bind 127.0.0.2 -q   (an ordinary client from another address)
+  seq=0   pid=26442  host=LAPTOP-0F0NVT4H up=0d 05:11:43 load=0.00/0.01/0.02 mem_avail=7.06 GiB/7.61 GiB
+server log:
+flood children: 20 | flood clients refused (ERR_BUSY): 0/20 | 127.0.0.2: served
+
+--- CAP: ./server -m 10 ---
+$ ./server -p 9090 -m 10
+$ ./client --mode idle --hold 3   x 20 from 127.0.0.1 (one host floods the server)
+server children 1 s later: 10
+$ ./client --bind 127.0.0.2 -q   (an ordinary client from another address)
+  23:35:22.604 [client:26515] ERROR server error 6: server busy: 10/10 connections in use
+server log:
+  23:35:21.603 [server:26473] WARN  rejected 127.0.0.1:34190: server busy: 10/10 connections in use (no fork)
+  23:35:21.604 [server:26473] WARN  rejected 127.0.0.1:34210: server busy: 10/10 connections in use (no fork)
+flood children: 10 | flood clients refused (ERR_BUSY): 10/20 | 127.0.0.2: refused
+
+--- WITH: ./server -m 10 --max-per-ip 5 ---
+$ ./server -p 9090 -m 10 --max-per-ip 5
+$ ./client --mode idle --hold 3   x 20 from 127.0.0.1 (one host floods the server)
+server children 1 s later: 5
+$ ./client --bind 127.0.0.2 -q   (an ordinary client from another address)
+  seq=0   pid=26584  host=LAPTOP-0F0NVT4H up=0d 05:11:49 load=0.00/0.01/0.02 mem_avail=7.06 GiB/7.61 GiB
+server log:
+  23:35:24.924 [server:26546] WARN  rejected 127.0.0.1:34296: too many connections from your address (5/5) (no fork)
+  23:35:24.925 [server:26546] WARN  rejected 127.0.0.1:34310: too many connections from your address (5/5) (no fork)
+flood children: 5 | flood clients refused (ERR_BUSY): 15/20 | 127.0.0.2: served
+
+--- Checks [4] ---
+  [PASS] without: one host gets 20 children, no bound
+  [PASS] total cap only: 10 children, but 127.0.0.2 is starved
+  [PASS] with per-IP cap: 5 children, 15 flood clients refused
+  [PASS] with per-IP cap: 127.0.0.2 is still served
+
+==============================================================================
+ [5] Slow sender: whole-request deadline vs per-read timeout
+==============================================================================
+Scenario: a 16-byte request sent one byte every 3 s. Each read() gets its
+          byte before the 5 s SO_RCVTIMEO, so only a deadline can stop it.
+
+--- WITHOUT ---
+$ ./server -p 9090 --no-deadline
+$ ./client --mode slow --hold 9   (16-byte request, 1 byte every 3 s)
+6.5 s after the first byte, server children:
+    PID    PPID STAT    VSZ   RSS     ELAPSED CMD
+  26624   26615 S+     2820   928       00:06 ./server -p 9090 --no-deadline
+client output:
+  23:35:28.251 [client:26622] INFO  slow sender: a 16-byte request, one byte every 3000 ms (45 s for all of it)
+  RESULT: no reaction within 9 s - 3/16 bytes sent, the server child is still waiting for the rest
+server log:
+  23:35:28.139 [server:26615] INFO  robustness: [4] connection limit 128 total, off per IP | [5] request deadline OFF | [6] stream framing ON | [7] heartbeat ON | [9] die with parent ON
+  23:35:37.264 [server:26615] INFO  reaped child 26624: exit 0 (client closed normally) | active=0
+
+--- WITH ---
+$ ./server -p 9090 
+$ ./client --mode slow --hold 9   (16-byte request, 1 byte every 3 s)
+6.5 s after the first byte, server children:
+    PID    PPID STAT    VSZ   RSS     ELAPSED CMD
+  (no child processes)
+client output:
+  23:35:37.405 [client:26640] INFO  slow sender: a 16-byte request, one byte every 3000 ms (45 s for all of it)
+  (the server reacted after 2 of 16 bytes)
+  RESULT: server rejected the request after 5.00 s: error 8 (request deadline exceeded)
+server log:
+  23:35:37.290 [server:26633] INFO  robustness: [4] connection limit 128 total, off per IP | [5] request deadline 5s | [6] stream framing ON | [7] heartbeat ON | [9] die with parent ON
+  23:35:42.408 [server:26642] WARN  127.0.0.1:49536: request still incomplete 5 s after its first byte -> slow sender cut off (deadline)
+  23:35:42.410 [server:26633] INFO  reaped child 26642: exit 6 (request deadline exceeded, slow sender cut off) | active=0
+
+--- Checks [5] ---
+  [PASS] without: the child is still waiting after 6.5 s
+  [PASS] with: the child cut the sender off (error 8) and exited
+
+==============================================================================
+ [6] TCP is a byte stream: split and glued messages
+==============================================================================
+Scenario: fragment = one request in 8 one-byte segments, 100 ms apart
+          pipeline = 5 requests glued into one write()
+
+--- WITHOUT ---
+$ ./server -p 9090 --naive-recv
+  $ ./client --mode fragment       (1 request as 8 one-byte segments)
+  23:35:44.049 [client:26658] INFO  sending one 8-byte SYSINFO_REQ as 8 separate 1-byte segments, 100 ms apart
+  23:35:44.050 [client:26658] ERROR server error 3: incomplete message
+  RESULT: the split request was NOT understood (0.00 s)
+  $ ./client --mode pipeline -q    (5 requests glued into one write)
+  23:35:44.057 [client:26660] INFO  sending 5 SYSINFO_REQs glued together in one write() (40 bytes)
+  23:35:47.210 [client:26660] ERROR receive failed: socket timeout
+  RESULT: 1/5 replies - 4 glued request(s) were lost
+server log:
+  23:35:44.050 [server:26659] WARN  127.0.0.1:44248: naive recv: one read() returned 1 byte(s), less than the 8-byte header -> taken as a broken message
+  23:35:44.057 [server:26661] WARN  127.0.0.1:44260: naive recv: one read() returned 40 bytes; parsed 1 message, the other 32 byte(s) are discarded (requests lost)
+  23:35:47.212 [server:26661] INFO  127.0.0.1:44260: client closed the connection after 1 request(s)
+
+--- WITH ---
+$ ./server -p 9090 
+  $ ./client --mode fragment       (1 request as 8 one-byte segments)
+  23:35:47.359 [client:26677] INFO  sending one 8-byte SYSINFO_REQ as 8 separate 1-byte segments, 100 ms apart
+  RESULT: the 8 pieces were reassembled into one request; reply from server pid 26678 after 0.70 s
+  $ ./client --mode pipeline -q    (5 requests glued into one write)
+  23:35:48.073 [client:26681] INFO  sending 5 SYSINFO_REQs glued together in one write() (40 bytes)
+  RESULT: 5/5 replies - every glued request was answered
+server log:
+  23:35:48.064 [server:26678] INFO  127.0.0.1:44276: client closed the connection after 1 request(s)
+  23:35:48.075 [server:26682] INFO  127.0.0.1:44292: client closed the connection after 5 request(s)
+
+--- Checks [6] ---
+  [PASS] without: the split request is rejected, 4 of 5 glued requests lost
+  [PASS] with: the split request is reassembled, 5/5 glued requests answered
+
+==============================================================================
+ [7] Frozen client: heartbeat (one ACK per push)
+==============================================================================
+Scenario: an endless subscriber is frozen with SIGSTOP (as Ctrl+Z) for 5 s.
+
+--- WITHOUT ---
+$ ./server -p 9090 --no-heartbeat
+$ ./client -w 100 --no-reconnect   (endless subscription, one ACK per push)
+$ kill -STOP 26698   (the client freezes like Ctrl+Z; its kernel still takes data)
+after 5 s frozen, server children:
+    PID    PPID STAT    VSZ   RSS     ELAPSED CMD
+  26700   26691 S+     2820  1756       00:06 ./server -p 9090 --no-heartbeat
+$ kill -CONT 26698   (the client resumes and reads what piled up)
+client: 70 snapshot lines; last lines:
+  seq=68  pid=26700  host=LAPTOP-0F0NVT4H up=0d 05:12:18 load=0.29/0.07/0.04 mem_avail=7.06 GiB/7.61 GiB
+  seq=69  pid=26700  host=LAPTOP-0F0NVT4H up=0d 05:12:18 load=0.29/0.07/0.04 mem_avail=7.06 GiB/7.61 GiB
+  seq=70  pid=26700  host=LAPTOP-0F0NVT4H up=0d 05:12:19 load=0.29/0.07/0.04 mem_avail=7.06 GiB/7.61 GiB
+server log:
+  23:35:48.221 [server:26700] INFO  127.0.0.1:36878: subscribe every 100 ms until the client leaves | heartbeat OFF
+
+--- WITH ---
+$ ./server -p 9090 
+$ ./client -w 100 --no-reconnect   (endless subscription, one ACK per push)
+$ kill -STOP 26721   (the client freezes like Ctrl+Z; its kernel still takes data)
+after 5 s frozen, server children:
+    PID    PPID STAT    VSZ   RSS     ELAPSED CMD
+  (no child processes)
+$ kill -CONT 26721   (the client resumes and reads what piled up)
+client: 39 snapshot lines; last lines:
+  seq=39  pid=26723  host=LAPTOP-0F0NVT4H up=0d 05:12:23 load=0.27/0.07/0.04 mem_avail=7.06 GiB/7.61 GiB
+  23:36:01.408 [client:26721] ERROR server error 7: heartbeat lost: no ACK from the client
+  23:36:01.408 [client:26721] ERROR connection lost after 39 push(es); reconnect disabled, exiting
+server log:
+  23:35:55.387 [server:26723] INFO  127.0.0.1:36882: subscribe every 100 ms until the client leaves | heartbeat ON
+  23:35:59.293 [server:26723] WARN  127.0.0.1:36882: no ACK for 3.0 s (last one for push #10) -> client frozen or unreachable, ending the subscription
+  23:35:59.295 [server:26714] INFO  reaped child 26723: exit 5 (heartbeat lost, client frozen or unreachable) | active=0
+
+--- Checks [7] ---
+  [PASS] without: the child keeps pushing to the frozen client
+  [PASS] with: the child ended the subscription (error 7)
+
+==============================================================================
+ [8] Server restart: client reconnect with exponential backoff
+==============================================================================
+Scenario: the server stops while a client is subscribed and is back 2 s later.
+
+--- WITHOUT ---
+$ ./server -p 9090 
+$ ./client -w 300 --no-reconnect   (background subscriber)
+stopping the server (crash or upgrade), starting a new one 2 s later
+$ ./server -p 9090 
+client status lines:
+  23:36:03.542 [client:26744] ERROR receive failed: peer closed the connection
+  23:36:03.542 [client:26744] ERROR connection lost after 4 push(es); reconnect disabled, exiting
+client 4 s after the restart: exited | server children that served it: 1
+
+--- WITH ---
+$ ./server -p 9090 
+$ ./client -w 300    (background subscriber)
+stopping the server (crash or upgrade), starting a new one 2 s later
+$ ./server -p 9090 
+client status lines:
+  23:36:10.801 [client:26770] ERROR receive failed: peer closed the connection
+  23:36:10.803 [client:26770] WARN  connection lost after 4 push(es)
+  23:36:10.803 [client:26770] WARN  reconnecting in 1 s (attempt 1/5)
+  23:36:11.804 [client:26770] ERROR cannot connect to 127.0.0.1:9090: Connection refused
+  23:36:11.805 [client:26770] WARN  reconnecting in 2 s (attempt 2/5)
+  23:36:13.806 [client:26770] INFO  reconnected to 127.0.0.1:9090 on attempt 2, subscribing again
+client 4 s after the restart: running | server children that served it: 2
+
+--- Checks [8] ---
+  [PASS] without: the client gave up when the server left
+  [PASS] with: the client reconnected and was served by the new server
+
+==============================================================================
+ [9] kill -9 of the parent: PR_SET_PDEATHSIG
+==============================================================================
+Scenario: 3 busy children, then the parent is killed with SIGKILL.
+
+--- WITHOUT ---
+$ ./server -p 9090 -t 30 --no-pdeathsig
+$ ./client --mode idle --hold 4   x 3 (three busy children)
+server parent 26790, children: 26801 26802 26803
+$ kill -9 26790   (SIGKILL cannot be caught: no cleanup code runs)
+the children afterwards:
+      PID    PPID STAT CMD
+    26801   26031 S+   ./server -p 9090 -t 30 --no-pdeathsig
+    26802   26031 S+   ./server -p 9090 -t 30 --no-pdeathsig
+    26803   26031 S+   ./server -p 9090 -t 30 --no-pdeathsig
+children still alive: 3 (an orphan's PPID is no longer the server)
+
+--- WITH ---
+$ ./server -p 9090 -t 30
+$ ./client --mode idle --hold 4   x 3 (three busy children)
+server parent 26814, children: 26825 26826 26827
+$ kill -9 26814   (SIGKILL cannot be caught: no cleanup code runs)
+the children afterwards:
+      PID    PPID STAT CMD
+children still alive: 0 (an orphan's PPID is no longer the server)
+
+--- Checks [9] ---
+  [PASS] without: 3 orphaned children keep running
+  [PASS] with: no child outlives the parent
+
+==============================================================================
+ Summary: WITHOUT vs WITH
+==============================================================================
+ Mechanism                            | WITHOUT (switched off)                | WITH (default)
+--------------------------------------+---------------------------------------+---------------------------------------
+ [1]  SIGCHLD + waitpid(WNOHANG)      | 12 zombie children                    | 0 zombie children
+ [1b] waitpid loop (signals coalesce) | 28 zombies after 30 exits             | 0 zombies after 30 exits
+ [2]  SIG_IGN(SIGPIPE) + EPIPE check  | 3 children killed by SIGPIPE          | 3 children exit 4 after EPIPE
+ [3]  header check + SO_RCVTIMEO      | 3 children stuck, 3 unanswered        | 0 children left, 3/3 answered
+ [4]  connection limit + per IP       | 20 children for one host              | 5 children, 127.0.0.2 served
+ [5]  whole-request deadline          | 1 child still waiting at 6.5 s        | 0 children, cut off at 5 s (error 8)
+ [6]  stream framing (read_n)         | split: 0/1 ok, glued: 1/5             | split: 1/1 ok, glued: 5/5
+ [7]  heartbeat (ACK per push)        | 1 child pushing to a frozen client    | 0 children, ended at 3 s (error 7)
+ [8]  client reconnect + backoff      | client exited                         | client running, 2 server pids
+ [9]  PR_SET_PDEATHSIG                | 3 orphans after kill -9               | 0 orphans after kill -9
+
+==============================================================================
+ Result
+==============================================================================
+ALL CHECKS PASSED

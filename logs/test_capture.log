@@ -1,0 +1,104 @@
+
+==============================================================================
+ Packet capture of the NP protocol (tcpdump on lo)
+==============================================================================
+date     : 2026-11-09 14:17:18
+kernel   : Linux 6.18.33.2-microsoft-standard-WSL2
+tcpdump  : tcpdump version 4.99.6
+privilege: sudo
+
+--- Start server and tcpdump ---
+$ ./server -p 9090                      -> pid 54043
+$ tcpdump -i lo -nn -U -w logs/capture.pcap 'tcp port 9090'
+tcpdump: listening on lo, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+
+--- Traffic ---
+$ ./client -q                 (1 request)
+seq=0   pid=54049  host=LAPTOP-0F0NVT4H up=0d 19:53:42 load=0.00/0.00/0.00 mem_avail=7.00 GiB/7.61 GiB
+$ ./client -w 200 -n 3        (subscription, 3 pushes)
+seq=1   pid=54051  host=LAPTOP-0F0NVT4H up=0d 19:53:42 load=0.00/0.00/0.00 mem_avail=7.00 GiB/7.61 GiB
+seq=2   pid=54051  host=LAPTOP-0F0NVT4H up=0d 19:53:42 load=0.00/0.00/0.00 mem_avail=7.00 GiB/7.61 GiB
+seq=3   pid=54051  host=LAPTOP-0F0NVT4H up=0d 19:53:42 load=0.00/0.00/0.00 mem_avail=7.00 GiB/7.61 GiB
+$ ./client --mode garbage     (HTTP request instead of NP)
+14:17:18.840 [client:54052] INFO  sending 36 bytes of non-NP data (an HTTP request)
+RESULT: server rejected the request after 0.00 s: error 1 (bad magic number)
+$ ./client --mode biglen      (header claims 4 GiB body)
+14:17:18.846 [client:54054] INFO  sending a valid header that claims body_len=4294967295
+RESULT: server rejected the request after 0.00 s: error 3 (body length exceeds limit)
+
+--- Stop tcpdump ---
+44 packets captured
+88 packets received by filter
+0 packets dropped by kernel
+
+--- First connection, packet by packet (tcpdump -r -c 10) ---
+14:17:18.423704 IP 127.0.0.1.51498 > 127.0.0.1.9090: Flags [S], seq 516249917, win 65495, options [mss 65495,sackOK,TS val 443719195 ecr 0,nop,wscale 10], length 0
+14:17:18.423721 IP 127.0.0.1.9090 > 127.0.0.1.51498: Flags [S.], seq 1514416859, ack 516249918, win 65483, options [mss 65495,sackOK,TS val 865343538 ecr 443719195,nop,wscale 10], length 0
+14:17:18.423735 IP 127.0.0.1.51498 > 127.0.0.1.9090: Flags [.], ack 1, win 64, options [nop,nop,TS val 443719196 ecr 865343538], length 0
+14:17:18.423792 IP 127.0.0.1.51498 > 127.0.0.1.9090: Flags [P.], seq 1:9, ack 1, win 64, options [nop,nop,TS val 443719196 ecr 865343538], length 8
+14:17:18.423796 IP 127.0.0.1.9090 > 127.0.0.1.51498: Flags [.], ack 9, win 64, options [nop,nop,TS val 865343538 ecr 443719196], length 0
+14:17:18.424206 IP 127.0.0.1.9090 > 127.0.0.1.51498: Flags [P.], seq 1:129, ack 9, win 64, options [nop,nop,TS val 865343538 ecr 443719196], length 128
+14:17:18.424231 IP 127.0.0.1.51498 > 127.0.0.1.9090: Flags [.], ack 129, win 64, options [nop,nop,TS val 443719196 ecr 865343538], length 0
+14:17:18.424293 IP 127.0.0.1.51498 > 127.0.0.1.9090: Flags [F.], seq 9, ack 129, win 64, options [nop,nop,TS val 443719196 ecr 865343538], length 0
+14:17:18.424991 IP 127.0.0.1.9090 > 127.0.0.1.51498: Flags [F.], seq 129, ack 10, win 64, options [nop,nop,TS val 865343539 ecr 443719196], length 0
+14:17:18.425008 IP 127.0.0.1.51498 > 127.0.0.1.9090: Flags [.], ack 130, win 64, options [nop,nop,TS val 443719197 ecr 865343539], length 0
+
+--- First request and reply as hex + ASCII (tcpdump -X): look for "NP" ---
+14:17:18.423792 IP 127.0.0.1.51498 > 127.0.0.1.9090: Flags [P.], seq 516249918:516249926, ack 1514416860, win 64, options [nop,nop,TS val 443719196 ecr 865343538], length 8
+	0x0000:  4500 003c 5a3b 4000 4006 e27e 7f00 0001  E..<Z;@.@..~....
+	0x0010:  7f00 0001 c92a 2382 1ec5 593e 5a44 2adc  .....*#...Y>ZD*.
+	0x0020:  8018 0040 fe30 0000 0101 080a 1a72 9e1c  ...@.0.......r..
+	0x0030:  3394 1832 4e50 0101 0000 0000            3..2NP......
+14:17:18.424206 IP 127.0.0.1.9090 > 127.0.0.1.51498: Flags [P.], seq 1:129, ack 8, win 64, options [nop,nop,TS val 865343538 ecr 443719196], length 128
+	0x0000:  4500 00b4 c2b4 4000 4006 798d 7f00 0001  E.....@.@.y.....
+	0x0010:  7f00 0001 2382 c92a 5a44 2adc 1ec5 5946  ....#..*ZD*...YF
+	0x0020:  8018 0040 fea8 0000 0101 080a 3394 1832  ...@........3..2
+	0x0030:  1a72 9e1c 4e50 0181 0000 0078 0000 d321  .r..NP.....x...!
+	0x0040:  0000 0000 4c41 5054 4f50 2d30 4630 4e56  ....LAPTOP-0F0NV
+	0x0050:  5434 4800 0000 0000 0000 0000 0000 0000  T4H.............
+	0x0060:  0000 0000 0000 0000 0000 0000 0000 0000  ................
+	0x0070:  0000 0000 0000 0000 0000 0000 0000 0000  ................
+	0x0080:  0000 0000 0000 0000 0001 17c6 0000 0000  ................
+	0x0090:  0079 b680 0000 0000 006e afc4 0000 0000  .y.......n......
+	0x00a0:  006f fe1c 0000 0000 0000 0000 0000 0000  .o..............
+	0x00b0:  0000 00d5                                ....
+
+--- NP decoder: every TCP payload split into NP messages ---
+seg  dir  ports       bytes   magic   ver  opcode           body_len
+  1  C->S 51498>9090      8   0x4E50    1  SYSINFO_REQ             0
+  2  S->C 9090>51498    128   0x4E50    1  SYSINFO_RESP          120
+  3  C->S 51500>9090     16   0x4E50    1  SUBSCRIBE_REQ           8
+  4  S->C 9090>51500    128   0x4E50    1  SYSINFO_RESP          120
+  5  S->C 9090>51500    128   0x4E50    1  SYSINFO_RESP          120
+  6  S->C 9090>51500    128   0x4E50    1  SYSINFO_RESP          120
+  7  C->S 51512>9090     36   non-NP data: "GET / HTTP/1.1.."
+  8  S->C 9090>51512     72   0x4E50    1  ERROR                  64
+  9  C->S 51524>9090      8   0x4E50    1  SYSINFO_REQ    4294967295
+ 10  S->C 9090>51524     72   0x4E50    1  ERROR                  64
+data segments: 10, NP messages: 9
+
+==============================================================================
+ Checks
+==============================================================================
+  [PASS] tcpdump captured packets on lo (44)
+  [PASS] SYSINFO_REQ x2 (normal request + biglen header)
+  [PASS] SUBSCRIBE_REQ x1
+  [PASS] SYSINFO_RESP x4 (1 reply + 3 pushes)
+  [PASS] ERROR x2 (garbage + biglen rejected)
+  [PASS] every server segment starts with magic 0x4E50
+  [PASS] server segments split exactly into 8-byte header + body_len
+  [PASS] every SYSINFO_RESP has body_len 120 (128 bytes on the wire)
+  [PASS] the garbage client's bytes are identified as non-NP
+  [PASS] the forged body_len 0xFFFFFFFF is visible in the capture
+  [PASS] tcpdump -X dump shows the header bytes 4e50 01 (9 lines)
+
+--- Open the capture in Wireshark ---
+  file          : logs/capture.pcap
+  display filter: tcp.port == 9090 && tcp.len > 0
+  NP header     : tcp.payload[0:2] == 4e:50 (magic), [2] version,
+                  [3] opcode, [4:4] body_len (big-endian)
+
+==============================================================================
+ Result
+==============================================================================
+ALL CHECKS PASSED

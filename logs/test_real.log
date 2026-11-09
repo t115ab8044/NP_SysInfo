@@ -1,0 +1,69 @@
+
+==== Environment ====
+date     : 2026-11-09 13:19:46
+kernel   : Linux 6.18.33.2-microsoft-standard-WSL2
+note     : one physical computer; see the header of this script
+
+==== Part 1: Windows host -> WSL2 VM (not loopback) ====
+server: Linux 6.18.33.2-microsoft-standard-WSL2 at 172.17.107.87:9190
+  [windows] client_os=Windows compiler=gcc-13-win32
+  [windows] local=172.17.96.1:59114 server=172.17.107.87:9190
+  [windows] sysinfo pid=36718 host=LAPTOP-0F0NVT4H uptime=68174s mem_total_kb=7976576 tasks=229
+  [windows] concurrent=12 distinct_pids=12
+  [windows] garbage reply_op=0xFF error=1 message=bad magic number
+  [windows] subscribe first_push_op=0x81 then abort with RST
+children seen by ps at the same time: 12
+13:19:51.047 [server:36677] INFO  accepted 172.17.96.1:59114 -> child pid 36718 (connection #1) | active=1
+13:19:51.048 [server:36677] INFO  accepted 172.17.96.1:59115 -> child pid 36719 (connection #2) | active=2
+13:19:54.683 [server:36677] INFO  shut down: 15 connection(s) served, 0 rejected, 0 child(ren) not reaped
+  [PASS] Windows client finished without error
+  [PASS] server saw the Windows address 172.17.96.1, not loopback
+  [PASS] no connection came from 127.0.0.1
+  [PASS] 12 connections answered by 12 distinct children
+  [PASS] at least 12 children alive at once in ps
+  [PASS] garbage from Windows rejected with error 1
+  [PASS] RST from Windows handled: child exit 4
+  [PASS] every child reaped
+Wireshark capture: 29 frames carrying NP, 15 connection attempts
+  172.17.96.1	172.17.107.87	8	4e50010100000000
+  172.17.107.87	172.17.96.1	128	4e5001810000007800008f6e000000004c415054
+  [PASS] Wireshark recorded NP frames between host and VM
+
+==== Part 2: two network stacks, injected faults ====
+--- clean link
+seq=0   pid=36923  host=LAPTOP-0F0NVT4H up=0d 18:56:24 load=0.13/0.07/0.02 mem_avail=6.99 
+  [PASS] client in another network stack is served
+--- 50 ms each way, 5 % packet loss
+rtt min/avg/max/mdev = 100.341/100.917/102.852/0.969 ms
+  Requests     : 60 ok, 0 failed (100.0 % success)
+  Latency (ms) : avg 118.340 | p50 100.639 | p95 111.325 | p99 431.570 | max 431.570
+  Wall time    : 0.945 s (63.5 ok req/s)
+  Server PIDs  : 12 distinct fork()ed server children
+  Workers      : 12 exited ok, 0 failed
+  [PASS] netem really delays the link (RTT 100.917 ms)
+  [PASS] all 60 requests survive delay and loss
+--- link cut for 6 s during a subscription
+link DOWN at 13:20:07
+link UP   at 13:20:13
+13:20:10.507 [client:36968] WARN  connection lost after 4 push(es)
+13:20:10.508 [client:36968] WARN  reconnecting in 1 s (attempt 1/5)
+13:20:13.583 [client:36968] ERROR cannot connect to 10.99.0.1:9190: No route to host
+13:20:13.585 [client:36968] WARN  reconnecting in 2 s (attempt 2/5)
+13:20:15.586 [client:36968] INFO  reconnected to 10.99.0.1:9190 on attempt 2, subscribing again
+13:20:10.353 [server:36970] WARN  10.99.0.2:33264: no ACK for 3.0 s (last one for push #4) -> client frozen or
+13:20:10.354 [server:36910] INFO  reaped child 36970: exit 5 (heartbeat lost, client frozen or unreachable) | 
+13:20:20.426 [server:36910] INFO  shut down: 15 connection(s) served, 0 rejected, 0 child(ren) not reaped
+  [PASS] server noticed the dead link by heartbeat
+  [PASS] that child exited with status 5
+  [PASS] client noticed the dead link
+  [PASS] client reconnected after the link came back
+  [PASS] pushes resumed after reconnecting (9 received)
+--- capture on the virtual cable (real Ethernet framing)
+packets: 300, ARP: 4, SYN or SYN+ACK: 30
+13:20:00.727995 a6:b2:a0:48:a2:32 > 0e:5a:20:15:49:49, ethertype IPv4 (0x0800), length 74: 10.99.0.2.33124 > 10.99.0.1.9
+13:20:00.728006 0e:5a:20:15:49:49 > a6:b2:a0:48:a2:32, ethertype IPv4 (0x0800), length 74: 10.99.0.1.9190 > 10.99.0.2.33
+  [PASS] ARP resolved the peer's MAC address
+  [PASS] tcp[13] & 2 == 2 finds the handshakes
+
+==== Result ====
+ALL CHECKS PASSED

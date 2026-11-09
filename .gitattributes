@@ -1,0 +1,6 @@
+# Keep LF endings so the sources and Makefile still build in Linux after a checkout on Windows.
+* text=auto eol=lf
+
+*.png    binary
+*.pcap   binary
+*.pcapng binary
