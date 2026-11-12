@@ -25,7 +25,6 @@ extern int tl_fails;
 extern int tl_port;
 extern char tl_port_str[16];
 extern pid_t tl_server_pid;
-extern const char *tl_server_log;
 
 /* Program setup: go to the project root, read PORT, optionally copy output to a log. */
 void tl_init(int default_port);
@@ -49,11 +48,9 @@ pid_t tl_spawn_opts(const char *dir, const char *out, int append, const char *co
 pid_t tl_spawn(const char *out, const char *const argv[]);
 int tl_wait(pid_t pid);
 int tl_run(const char *out, const char *const argv[]);
-int tl_running(pid_t pid);
 int tl_which(const char *name);
 void tl_sleep(double seconds);
 long long tl_now_ms(void);
-extern int tl_last_status;
 char *tl_capture(const char *const argv[]);         /* stdout + stderr */
 char *tl_capture_out(const char *const argv[]);     /* stdout only */
 
@@ -78,7 +75,6 @@ char *tl_match(const char *text, const char *ere);
 int tl_nlines(const char *text);
 char *tl_head(const char *text, int n);
 char *tl_tail(const char *text, int n);
-char *tl_strip_cr(const char *text);
 void tl_print_lines(const char *text, const char *prefix, int cut);
 void tl_print_file(const char *path);
 void tl_append_prefixed(const char *src, const char *prefix, const char *dst);
@@ -87,7 +83,6 @@ char *tl_join(const char *const items[]);
 
 /* Environment */
 char *tl_date(void);
-char *tl_time_hms(void);
 char *tl_kernel(void);
 char *tl_compiler(void);
 char *tl_mktemp(const char *prefix);

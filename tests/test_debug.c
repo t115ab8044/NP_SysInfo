@@ -7,7 +7,7 @@
  *                 calls, and ./server -d 2 prints no DEBUG line at all.
  *   Run time      debug build with ./server -d 0 / -d 1 / -d 2
  *                 0 = INFO/WARN/ERROR only, 1 = + DEBUG lines with file:line,
- *                 2 = + packet trace (decoded headers and hex dumps)
+ *                 2 = + hex dumps of every request and reply
  *
  * Usage : make test-debug        (env: PORT=9090)
  * Output: logs/test_debug.log, logs/debug_*.log
@@ -19,10 +19,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Format strings that exist only inside LOG_DEBUG / LOG_HEXDUMP calls */
-#define DEBUG_ONLY_RE "child started|push #%u sent|RX header magic=|TX %s\\(0x|read_n: interrupted"
-/* Lines that only -d 2 produces: decoded headers and hex dump rows */
-#define PACKET_RE "RX header magic=|TX [A-Z_]+\\(0x|(TX|RX) (packet|header|body): |DEBUG +[0-9a-f]{4}  "
+/* Format strings that exist only inside LOG_DEBUG calls */
+#define DEBUG_ONLY_RE "child started|sent snapshot %d/%d|write_all: interrupted|sysinfo: host=%s"
+/* Lines that only -d 2 produces: hex dump headers and rows */
+#define HEXDUMP_RE "DEBUG +(request|reply): [0-9]+ byte|DEBUG +[0-9a-f]{4}  "
 
 static char *g_tmp;
 
@@ -46,13 +46,13 @@ static char *debug_strings(const char *dir)
                                       tl_fmt("%s/libutils.so", dir))), DEBUG_ONLY_RE, 0);
 }
 
-/* The call instructions inside proto_send() of a build's libutils.so */
-static char *proto_send_calls(const char *dir)
+/* The call instructions inside write_all() of a build's libutils.so */
+static char *write_all_calls(const char *dir)
 {
     char *dump = tl_capture_out(CMD("objdump", "-d", "--no-show-raw-insn",
                                     tl_fmt("%s/libutils.so", dir)));
-    char *text = NULL;
-    char *body = strstr(dump, " <proto_send>:\n");
+    char *text;
+    char *body = strstr(dump, " <write_all>:\n");
     char *end;
     char *calls;
     char *line;
@@ -85,7 +85,7 @@ static int run(void)
     char *rel_client_out = tl_fmt("%s/rel_client.txt", g_tmp);
     const char *rel_server_log = "logs/debug_release_server_d2.log";
     const char *client_d2 = "logs/debug_client_d2.log";
-    int total[3], info[3], dbg[3], pkt[3];
+    int total[3], info[3], dbg[3], hex[3];
     int rel_gcc, dbg_gcc, rel_flags, dbg_flags, rel_strings, dbg_strings, rel_calls, dbg_calls;
     int rel_client, rel_debug, rel_warn, lvl;
 
@@ -98,7 +98,10 @@ static int run(void)
     }
 
     tl_banner("Part 1 - compile time: make DEBUG=0 vs make DEBUG=1");
-    tl_section("make clean && make DEBUG=0 all   (release)");
+    /* Show the gcc command lines even when started as `make -s test-debug`. */
+    unsetenv("MAKEFLAGS");
+    unsetenv("MFLAGS");
+    tl_section("make clean-build && make DEBUG=0 all   (release)");
     tl_run(NULL, CMD("make", "-s", "clean-build"));
     if (tl_run(make0, CMD("make", "DEBUG=0", "all")) != 0) {
         tl_print_file(make0);
@@ -125,13 +128,13 @@ static int run(void)
     printf("debug build  : %d\n", dbg_strings);
     tl_print_lines(debug_strings(debug_dir), "    ", 0);
 
-    tl_section("call instructions inside proto_send() (objdump -d libutils.so)");
+    tl_section("call instructions inside write_all() (objdump -d libutils.so)");
     puts("release build:");
-    tl_print_lines(proto_send_calls(release_dir), "    ", 0);
+    tl_print_lines(write_all_calls(release_dir), "    ", 0);
     puts("debug build:");
-    tl_print_lines(proto_send_calls(debug_dir), "    ", 0);
-    rel_calls = tl_count(proto_send_calls(release_dir), "<log_(write|hexdump)");
-    dbg_calls = tl_count(proto_send_calls(debug_dir), "<log_(write|hexdump)");
+    tl_print_lines(write_all_calls(debug_dir), "    ", 0);
+    rel_calls = tl_count(write_all_calls(release_dir), "<log_(write|hexdump)");
+    dbg_calls = tl_count(write_all_calls(debug_dir), "<log_(write|hexdump)");
 
     tl_section("Code size (size, bytes)");
     tl_wait(tl_spawn_opts(g_tmp, NULL, 0, CMD("size", "release/libutils.so", "debug/libutils.so",
@@ -141,7 +144,7 @@ static int run(void)
     if (start_server(release_dir, rel_server_log, CMD("-d", "2")) != 0)
         return 1;
     rel_client = tl_wait(tl_spawn_opts(release_dir, rel_client_out, 0,
-                                       CMD("./client", "-p", tl_port_str, "-q", "-d", "2")));
+                                       CMD("./client", "-p", tl_port_str, "-d", "2")));
     tl_sleep(0.3);
     tl_stop_server();
     puts("server log:");
@@ -161,10 +164,10 @@ static int run(void)
             return 1;
         if (lvl == 2) {
             tl_wait(tl_spawn_opts(debug_dir, client_d2, 0,
-                                  CMD("./client", "-p", tl_port_str, "-q", "-d", "2")));
+                                  CMD("./client", "-p", tl_port_str, "-d", "2")));
         } else {
             tl_wait(tl_spawn_opts(debug_dir, "/dev/null", 0,
-                                  CMD("./client", "-p", tl_port_str, "-q")));
+                                  CMD("./client", "-p", tl_port_str)));
         }
         tl_sleep(0.3);
         tl_stop_server();
@@ -172,35 +175,34 @@ static int run(void)
         total[lvl] = tl_nlines(tl_read(log));
         info[lvl] = tl_file_count(log, " (INFO|WARN|ERROR) ");
         dbg[lvl] = tl_file_count(log, " DEBUG ");
-        pkt[lvl] = tl_file_count(log, PACKET_RE);
+        hex[lvl] = tl_file_count(log, HEXDUMP_RE);
     }
 
     tl_section("Client side with -d 2 (logs/debug_client_d2.log)");
     tl_print_file(client_d2);
 
     tl_section("Server log lines per runtime level");
-    printf("  %-6s %7s %11s %7s %14s\n", "level", "total", "INFO/WARN", "DEBUG", "packet-trace");
-    for (lvl = 0; lvl <= 2; lvl++) {
-        printf("  -d %-3d %7d %11d %7d %14d\n", lvl, total[lvl], info[lvl], dbg[lvl], pkt[lvl]);
-    }
+    printf("  %-6s %7s %11s %7s %10s\n", "level", "total", "INFO/WARN", "DEBUG", "hex dump");
+    for (lvl = 0; lvl <= 2; lvl++)
+        printf("  -d %-3d %7d %11d %7d %10d\n", lvl, total[lvl], info[lvl], dbg[lvl], hex[lvl]);
 
     tl_banner("Checks");
     tl_expect(rel_gcc == 3 && rel_flags == 0, "make DEBUG=0 builds all 3 targets without -DENABLE_DEBUG");
     tl_expect(dbg_gcc == 3 && dbg_flags == 3, "make DEBUG=1 builds all 3 targets with -DENABLE_DEBUG");
     tl_expect(rel_strings == 0, "release binaries contain 0 debug-only format strings");
     tl_expect(dbg_strings > 0, "debug binaries contain them (%d found)", dbg_strings);
-    tl_expect(rel_calls == 0, "release proto_send() makes no logger call");
-    tl_expect(dbg_calls >= 2, "debug proto_send() calls the logger (%d calls)", dbg_calls);
+    tl_expect(rel_calls == 0, "release write_all() makes no logger call");
+    tl_expect(dbg_calls >= 2, "debug write_all() calls the logger (%d calls)", dbg_calls);
     tl_expect(rel_debug == 0, "release build with -d 2: 0 DEBUG lines from server and client");
     tl_expect(rel_warn == 1, "release server warns that -d has no effect");
     tl_expect(rel_client == 0, "release build still serves the request");
     tl_expect(info[0] > 0 && dbg[0] == 0, "-d 0: INFO lines only, 0 DEBUG lines");
-    tl_expect(dbg[1] > 0 && pkt[1] == 0, "-d 1: verbose DEBUG lines, no packet trace");
+    tl_expect(dbg[1] > 0 && hex[1] == 0, "-d 1: DEBUG lines, no hex dump");
     tl_expect(tl_file_count("logs/debug_server_d1.log", "DEBUG [a-z]+\\.c:[0-9]+:") > 0,
               "-d 1: DEBUG lines carry file:line");
-    tl_expect(pkt[2] > 0, "-d 2: packet trace present (%d lines)", pkt[2]);
-    tl_expect(tl_file_count("logs/debug_server_d2.log", "DEBUG     0000  4e 50") > 0,
-              "-d 2: hex dump starts with the NP magic (4e 50)");
+    tl_expect(hex[2] > 0, "-d 2: hex dumps present (%d lines)", hex[2]);
+    tl_expect(tl_file_count("logs/debug_server_d2.log", "DEBUG     0000  53 59 53 49 4e 46 4f") > 0,
+              "-d 2: the request dump reads \"SYSINFO\" (53 59 53 49 4e 46 4f)");
     tl_expect(total[0] < total[1] && total[1] < total[2], "output grows with the level (%d < %d < %d lines)",
               total[0], total[1], total[2]);
 

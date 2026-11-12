@@ -29,8 +29,6 @@ int tl_fails;
 int tl_port;
 char tl_port_str[16];
 pid_t tl_server_pid;
-const char *tl_server_log;
-int tl_last_status;
 
 static pid_t g_tee_pid;
 
@@ -270,17 +268,6 @@ int tl_run(const char *out, const char *const argv[])
     return tl_wait(tl_spawn(out, argv));
 }
 
-/* True until the child has exited; the child stays waitable afterwards. */
-int tl_running(pid_t pid)
-{
-    siginfo_t info;
-
-    info.si_pid = 0;
-    if (waitid(P_PID, (id_t)pid, &info, WEXITED | WNOHANG | WNOWAIT) != 0)
-        return 0;
-    return info.si_pid == 0;
-}
-
 int tl_which(const char *name)
 {
     const char *path = getenv("PATH");
@@ -355,7 +342,7 @@ static char *capture(const char *const argv[], int with_stderr)
         fwrite(buf, 1, (size_t)n, mem);
     fclose(mem);
     close(fds[0]);
-    tl_last_status = tl_wait(pid);
+    tl_wait(pid);
     return text;
 }
 
@@ -381,7 +368,6 @@ int tl_start_server(const char *dir, const char *log, const char *const flags[])
     for (i = 0; flags[i] && n < MAX_ARGS - 1; i++)
         argv[n++] = flags[i];
     argv[n] = NULL;
-    tl_server_log = log;
     tl_server_pid = tl_spawn_opts(dir, log, 0, argv);
     for (i = 0; i < 100; i++) {
         if (tl_port_in_use(tl_port))
@@ -621,19 +607,6 @@ char *tl_tail(const char *text, int n)
     return strdup(p);
 }
 
-char *tl_strip_cr(const char *text)
-{
-    char *copy = strdup(text);
-    char *out = copy;
-
-    for (; *text; text++) {
-        if (*text != '\r')
-            *out++ = *text;
-    }
-    *out = '\0';
-    return copy;
-}
-
 void tl_print_lines(const char *text, const char *prefix, int cut)
 {
     const char *cursor = text;
@@ -712,11 +685,6 @@ static char *format_now(const char *fmt)
 char *tl_date(void)
 {
     return format_now("%F %T");
-}
-
-char *tl_time_hms(void)
-{
-    return format_now("%T");
 }
 
 char *tl_kernel(void)

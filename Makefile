@@ -2,17 +2,16 @@
 # Makefile - NP SysInfo midterm project (fork server + client + libutils.so)
 #
 #   make              debug build: -DENABLE_DEBUG, LOG_DEBUG compiled in
-#   make release      LOG_DEBUG expands to nothing (zero overhead)
+#   make release      LOG_DEBUG expands to nothing
 #   make demo         one-command live demo, about 3 seconds
-#   make test         run the concurrency, robustness and debug proof programs
-#   make test-capture tcpdump proof of the wire format (needs root / sudo)
-#   make test-real    Windows <-> WSL2 traffic, plus injected network faults
-#   make audit        static analysis, sanitizers, load and hostile-peer tests
+#   make test         concurrency, robustness and debug test programs
+#   make test-capture tcpdump capture of one request, decoded (needs root / sudo)
 #   make inspect      exported symbols of libutils.so and ldd linkage
-#   make capture      live hex dump of loopback traffic (needs sudo)
+#   make capture      live tcpdump of the server port on loopback (needs sudo)
+#   make win-client   win_client.exe for the Real Test from Windows (needs mingw-w64)
 #
 # -Wl,-rpath,'$ORIGIN' makes each binary load the libutils.so sitting next to
-# it, from any working directory and never one found in the current directory.
+# it, from any working directory.
 # ===========================================================================
 
 CC      := gcc
@@ -28,16 +27,16 @@ endif
 PORT    ?= 9090
 LIB     := libutils.so
 BINS    := server client
-HDRS    := protocol.h utils.h
+HDRS    := utils.h
 
-# The test programs are always built with plain gcc, even for sanitized builds.
-TEST_CC     := gcc
 TEST_CFLAGS := -Wall -Wextra -pedantic -std=gnu11 -O2 -g
-TEST_NAMES  := demo test_concurrent test_robustness test_debug test_capture test_real test_audit
+TEST_NAMES  := demo test_concurrent test_robustness test_debug test_capture
 TEST_BINS   := $(addprefix tests/,$(TEST_NAMES))
 
+WIN_CC      := x86_64-w64-mingw32-gcc
+
 .PHONY: all release demo test test-concurrent test-robust test-debug test-capture \
-        test-real audit inspect capture capture-pcap test-programs clean clean-build
+        inspect capture win-client test-programs clean clean-build
 
 all: $(LIB) $(BINS)
 
@@ -58,12 +57,10 @@ release:
 	$(MAKE) DEBUG=0 all
 
 $(TEST_BINS): tests/%: tests/%.c tests/testlib.c tests/testlib.h
-	@$(TEST_CC) $(TEST_CFLAGS) -o $@ $< tests/testlib.c
+	@$(CC) $(TEST_CFLAGS) -o $@ $< tests/testlib.c
 
 test-programs: $(TEST_BINS)
 
-# One-command live demo (~3 s): .so linkage, sysinfo, 12 concurrent forks,
-# a rejected garbage request, no zombies.
 demo: all tests/demo
 	@./tests/demo
 
@@ -82,12 +79,6 @@ test-debug: all tests/test_debug
 test-capture: all tests/test_capture
 	@./tests/test_capture
 
-test-real: all tests/test_real
-	@./tests/test_real
-
-audit: all tests/test_audit
-	@./tests/test_audit
-
 inspect: all
 	@echo "== Symbols exported by $(LIB) =="
 	@nm -D --defined-only $(LIB) | grep -E ' [TBD] '
@@ -95,14 +86,17 @@ inspect: all
 	@ldd ./server ./client
 
 capture:
-	sudo tcpdump -i lo -nn -X 'tcp port $(PORT)'
+	sudo tcpdump -i lo -n -x 'tcp port $(PORT)'
 
-capture-pcap:
-	sudo tcpdump -i lo -nn -w capture.pcap 'tcp port $(PORT)'
+# Real Test: a Winsock client to run on Windows against the server in WSL2.
+win-client: win_client.exe
+
+win_client.exe: tests/win_client.c
+	$(WIN_CC) -Wall -Wextra -pedantic -std=gnu11 -O2 -o $@ $< -lws2_32
 
 # Used by the test programs: removes the build but keeps the running test binaries.
 clean-build:
 	rm -f $(LIB) $(BINS) .build_flags
 
 clean: clean-build
-	rm -f $(TEST_BINS) tests/hostile_server tests/np_client_win.exe capture.pcap
+	rm -f $(TEST_BINS) win_client.exe

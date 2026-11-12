@@ -1,6 +1,7 @@
 # Build outputs (recreate with `make`)
 /server
 /client
+/win_client.exe
 *.so
 *.o
 .build_flags
@@ -11,13 +12,6 @@
 /tests/test_robustness
 /tests/test_debug
 /tests/test_capture
-/tests/test_real
-/tests/test_audit
-/tests/hostile_server
-/tests/np_client_win.exe
-
-# Output of `make capture-pcap`; the evidence captures live in logs/
-/capture.pcap
 
 # Local packaged copy of this repository
 /NP_SysInfo_source.zip
@@ -26,5 +20,4 @@
 /logs/robust_*
 /logs/concurrent_*
 /logs/debug_*
-/logs/real_*.log
 /logs/capture_server.log

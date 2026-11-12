@@ -5,16 +5,15 @@
  *
  *   1. both binaries are linked against libutils.so
  *   2. start the fork() server in the background
- *   3. one client requests system information
+ *   3. one client requests system information (SYSINFO)
  *   4. CLIENTS clients connect at the same time -> CLIENTS fork()ed children
- *   5. robustness: a garbage request is rejected at once
+ *   5. robustness: an unknown request is rejected with an ERROR line
  *   6. stop the server; every child was reaped (no zombies)
  *
- * env: PORT=9090 (the next free port is used if it is busy) CLIENTS=12 HOLD=2
+ * env: PORT=9090 (the next free port is used if it is busy) CLIENTS=12
  */
 #include "testlib.h"
 
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,11 +35,9 @@ static void step(const char *title)
 static int run(void)
 {
     int clients = tl_env_int("CLIENTS", 12);
-    int hold = tl_env_int("HOLD", 2);
-    char *hold_str = tl_fmt("%d", hold);
     pid_t pids[MAX_CLIENTS];
     pid_t distinct[MAX_CLIENTS];
-    char *server_log;
+    char *server_log, *server_pid;
     char *all_output = strdup("");
     long long t0, elapsed;
     int nchild, ok = 0, ndistinct, zombies, accepted, reaped, i;
@@ -64,38 +61,35 @@ static int run(void)
     step("2. start the fork() server");
     if (tl_start_server(NULL, server_log, NO_FLAGS) != 0)
         return 1;
-    printf("  ./server -p %d   -> parent PID %d\n", tl_port, (int)tl_server_pid);
+    server_pid = tl_fmt("%d", (int)tl_server_pid);
+    printf("  ./server -p %d   -> parent PID %s\n", tl_port, server_pid);
 
     step("3. client requests system information");
-    if (tl_run(NULL, CMD("./client", "-p", tl_port_str)) != 0)
-        return 1;
+    printf("  $ ./client -p %d\n", tl_port);
+    fputs(tl_capture_out(CMD("./client", "-p", tl_port_str)), stdout);
 
-    printf("\n%s== 4. %d clients at the same time (each holds %d s) ==%s\n", B, clients, hold, N);
+    printf("\n%s== 4. %d clients at the same time (WATCH 6 500: 6 snapshots in 3 s) ==%s\n",
+           B, clients, N);
     for (i = 0; i < clients; i++) {
         pids[i] = tl_spawn(tl_fmt("%s/client_%d", g_tmp, i + 1),
-                           CMD("./client", "-p", tl_port_str, "-q", "--hold", hold_str));
+                           CMD("./client", "-p", tl_port_str, "-n", "6", "-w", "500"));
     }
     for (i = 0; i < 100 && tl_child_count() < clients; i++)
         tl_sleep(0.02);
-    {
-        char *server_pid = tl_fmt("%d", (int)tl_server_pid);
-
-        tl_run(NULL, CMD("ps", "--forest", "-o", "pid,ppid,stat,cmd", "-p", server_pid,
-                         "--ppid", server_pid));
-    }
+    tl_run(NULL, CMD("ps", "--forest", "-o", "pid,ppid,stat,cmd", "-p", server_pid,
+                     "--ppid", server_pid));
     nchild = tl_child_count();
     for (i = 0; i < clients; i++) {
         if (tl_wait(pids[i]) == 0)
             ok++;
     }
-    for (i = 0; i < clients; i++) {
+    for (i = 0; i < clients; i++)
         all_output = tl_fmt("%s%s", all_output, tl_read(tl_fmt("%s/client_%d", g_tmp, i + 1)));
-    }
     ndistinct = tl_distinct_pids(all_output, distinct, MAX_CLIENTS);
 
-    step("5. robustness: send a garbage header");
-    fputs(tl_grep(tl_capture(CMD("./client", "-p", tl_port_str, "--mode", "garbage", "--hold", "2")),
-                  "rejected|stuck|error", 0), stdout);
+    step("5. robustness: an unknown request is rejected");
+    printf("  $ ./client -p %d -r HELLO\n", tl_port);
+    fputs(tl_capture_out(CMD("./client", "-p", tl_port_str, "-r", "HELLO")), stdout);
 
     tl_sleep(0.2);
     zombies = tl_zombie_count();
