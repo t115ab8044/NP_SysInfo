@@ -19,20 +19,28 @@
 
 ```mermaid
 flowchart TD
-    C["Client 1 ... N"] -->|"TCP :9090"| P["Server parent<br/>accept → 檢查上限 → fork"]
-    P -->|fork| K1["Child 1"]
-    P -->|fork| K2["Child 2"]
-    P -->|fork| KN["Child N"]
-    P -.->|"達上限：直接回 ERROR server busy，不 fork"| C
-    K1 -.->|"結束時 kernel 送 SIGCHLD"| R["Parent 用 waitpid 迴圈回收"]
-    K2 -.-> R
-    KN -.-> R
-    subgraph SO["libutils.so：client 與 server 共用"]
-        direction LR
-        L1["Logger"] ~~~ L2["write_all / read_line"] ~~~ L3["系統資訊"] ~~~ L4["雜項工具"]
+    C["client"]
+    subgraph SRV["server"]
+        subgraph P["Server parent（一個程序）"]
+            A["主迴圈<br/>accept → [4] 檢查上限<br/>→ fork"]
+            H["SIGCHLD handler<br/>[1] waitpid 迴圈回收"]
+        end
+        K["Child 1 … N（預設最多 32 個）<br/>[2] 處理 EPIPE<br/>[3] 請求 ≤ 127 bytes<br/>[5] PDEATHSIG"]
     end
-    R ~~~ SO
+    OS{{"Linux kernel"}}
+    SO[("libutils.so")]
+
+    C ==>|"① connect :9090"| A
+    A ==>|"[4] 滿了：ERROR server busy"| C
+    A -->|"② fork，連線交給 child"| K
+    C <==>|"③ 請求與回覆"| K
+    K <-.->|"④ _exit(0–3)<br/>[5] parent 死掉時收到 SIGTERM"| OS
+    H <-.->|"⑤ SIGCHLD → waitpid()"| OS
+    C --- SO
+    SRV --- SO
 ```
+
+**圖例：** 粗線是 TCP 上的資料，細實線是 `fork()`，虛線是和 kernel 之間的互動（程序結束、訊號、回收），沒有箭頭的線是動態連結。①～⑤ 是一條連線的先後順序；[1]～[5] 是[第 5 節](#5-穩健性設計)的穩健機制，標在負責它的程序上。
 
 ### 程序模型（Process Model）
 
@@ -51,6 +59,8 @@ flowchart TD
 
 client 和 server 都動態連結 **`libutils.so`**：logger、`write_all`、`read_line`、系統資訊擷取與格式化。回應的格式由同一個 `sysinfo_format()` 產生，兩邊不會不一致。
 
+Real Test 用的 `win_client.exe` 是另外用 Winsock 寫的 Windows 版 client，不連結 `libutils.so`，因為 `.so` 只能在 Linux 載入。
+
 ## 3. 執行流程
 
 ```mermaid
@@ -58,15 +68,23 @@ sequenceDiagram
     participant C as Client
     participant P as Server parent
     participant K as Child
+    participant OS as Kernel
     C->>P: connect()
-    P->>P: accept()，檢查連線上限
+    P->>P: accept() 得到 cfd，檢查連線上限
     P->>K: fork()
+    Note over P,K: fork 後兩個程序都有 lfd 和 cfd
+    P->>P: close(cfd)：連線交給 child
+    K->>K: close(lfd)：child 不 accept
     C->>K: "SYSINFO\n"
     K->>C: "OK seq=1 pid=... \n"
-    K->>C: close()（FIN）
-    K-->>P: _exit(0) → SIGCHLD
-    P->>P: waitpid() 回收，寫 log
+    K->>C: close(cfd)（FIN）
+    K->>OS: _exit(0)
+    OS-->>P: SIGCHLD
+    P->>OS: waitpid() 迴圈回收
+    P->>P: 回到主迴圈，寫 log「reaped child ... exit 0」
 ```
+
+兩個 `close()` 讓每條連線只有一個程序持有：parent 只留 listening socket，child 只留自己的連線。[稽核討論](audit.md)實測服務 50 個 client 前後，parent 的 fd 都是 5 個，child 也只持有自己那條連線。
 
 ### 請求與回應
 
