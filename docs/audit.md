@@ -21,7 +21,7 @@
 | # | 問題 | 怎麼發現 | 修正 |
 |---|---|---|---|
 | 1 | `WATCH 4294967297 100` 被當成 `WATCH 1 100` 接受，`WATCH 2 4294967496` 被當成間隔 200 ms。`sscanf` 的 `%d` 讀到超過 `int` 範圍的數字是未定義行為，glibc 實際上會截斷，截斷後的值剛好落在合法範圍內 | 稽核時用超大數字測輸入邊界 | 改成 `%3d`、`%5d`，數字最多讀 3 位和 5 位，不可能溢位；多出來的位數會被 `%1s` 讀到，請求被拒絕（[server.c:266](../server.c#L266)） |
-| 2 | client 有 `-t` 逾時（`SO_RCVTIMEO`），但文件寫「不做逾時」，而逾時屬於期末的可靠度項目 | 拿期中、期末規定逐項對照 | 拿掉 client 的逾時和 `.so` 裡的 `set_socket_timeout()`；測試用的 `idle`、`longline` client 改由測試程式結束 |
+| 2 | client 有 `-t` 逾時（`SO_RCVTIMEO`），但文件寫「沒有逾時」，程式和文件不一致 | 拿期中規定和文件逐項對照程式 | 拿掉 client 的逾時和 `.so` 裡的 `set_socket_timeout()`；測試用的 `idle`、`longline` client 改由測試程式結束 |
 | 3 | client 沒送完請求就斷線時，log 寫 `closed the connection without a request`，exit code 卻是 0（代表成功） | 讀 `make test-robust` 的 server log | 改成 `left before sending a complete request`，exit 3（client 已離開） |
 | 4 | `make test-capture` 只抓到 68 個封包中的 11 個 | 測試程式比對封包數時失敗 | libpcap 是一批一批把封包交給 tcpdump，太早停止就會漏掉；停止前多等 2 秒 |
 | 5 | 用 `make -s test` 執行時，`test_debug` 的「`make DEBUG=0/1` 能建置」兩項失敗 | 測試結果 | 內層 make 繼承了外層的 `MAKEFLAGS`；執行內層 make 之前先清掉 `MAKEFLAGS`、`MFLAGS` |
@@ -40,8 +40,8 @@
 
 | 風險 | 影響 | 為什麼沒修、怎麼改善 |
 |---|---|---|
-| 閒置連線佔滿名額 | 32 個連上後不送資料的 client，就能讓其他人都收到 `ERROR server busy` | 根本解法是逾時，屬於期末的可靠度項目。期中用機制 [4] 把影響限制在最多 32 個 child，不會拖垮整台主機 |
-| 明文、沒有身分驗證 | 連得到 port 9090 的人都能讀到 hostname、負載和記憶體 | 加密與登入屬於期末的安全性項目。實際使用時，可以用防火牆只開放給管理用的網段 |
+| 閒置連線佔滿名額 | 32 個連上後不送資料的 client，就能讓其他人都收到 `ERROR server busy` | 根本解法是逾時，本專案沒有做。目前用機制 [4] 把影響限制在最多 32 個 child，不會拖垮整台主機 |
+| 明文、沒有身分驗證 | 連得到 port 9090 的人都能讀到 hostname、負載和記憶體 | 本專案沒有做加密與登入。實際使用時，可以用防火牆只開放給管理用的網段 |
 | 回收紀錄可能延後 | SIGCHLD 剛好在 `accept()` 開始之前到達時，`reaped child` 那行 log 要等到下一條連線進來才印出 | 只影響 log 的時間。每次檢查連線上限前都會先處理回收紀錄，所以 `active` 的數字是對的 |
 | 回收紀錄的 ring buffer 只有 256 格 | 兩次處理之間回收超過 256 個 child 時，較早的 PID 紀錄會被覆蓋 | 預設最多 32 個 child，不會發生；只有 `--no-limit` 時才有可能，而且只影響 log 內容，`active` 的計數不受影響 |
 | 只支援 Linux 與 IPv4 | 用到 `prctl`、`sysinfo(2)` 和 `/proc/meminfo` | 期中範圍內不需要跨平台 |
