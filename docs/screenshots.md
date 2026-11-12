@@ -2,7 +2,7 @@
 
 [← 回到 README](../README.md) ・ [系統設計說明](system-design.md) ・ [關鍵原始碼說明](key-source.md) ・ [稽核討論](audit.md)
 
-以下都是在 WSL2 Ubuntu 上實際執行的畫面。每張圖上方是產生該畫面的指令，在專案資料夾執行即可重現。
+以下都是在 WSL2 Ubuntu 上實際執行的畫面。每張圖上方是產生該畫面的指令，在專案資料夾執行即可重現。截圖 3、5、14 都會在 9090 埠啟動 server，執行前要先確定沒有其他 server 在跑。
 
 ## 1. 建置與動態函式庫
 
@@ -76,6 +76,8 @@ sed -n '/^==== \[3\]/,/with: rejected after/p' logs/test_robustness.log
 
 Without 時緩衝區一路加倍到 32 MiB，child 的 RSS 約 17 MiB；With 時讀到 127 bytes 就回 `ERROR request too long`。
 
+緩衝區配置到 32 MiB，但實際只寫入 16 MiB；沒寫到的部分 Linux 不會配實體記憶體，所以 RSS 約 17 MiB。With 的 `ps` 沒有列出 child，是因為 child 拒絕請求後 2 ms 內就結束了。
+
 ![請求長度上限的 With/Without 對比](screenshots/07_longline.png)
 
 ## 8. With/Without [4]：連線上限
@@ -134,13 +136,19 @@ sed -n '/Bytes of the request packet/,/payload (8 bytes)/p' logs/test_capture.lo
 
 ## 14. Real Test：Windows client 連到 WSL2 的 server
 
+先在 WSL 編出 Windows 版 client（需要 mingw-w64），並查出 WSL 的 IP：
+
+```bash
+make win-client && hostname -I
+```
+
 WSL 終端機：
 
 ```bash
 ./server -d 1
 ```
 
-Windows PowerShell，IP 換成在 WSL 用 `hostname -I` 查到的位址：
+Windows PowerShell，在專案資料夾執行，IP 換成上面 `hostname -I` 查到的位址：
 
 ```powershell
 .\win_client.exe 172.17.107.87 9090 "WATCH 3 500"
