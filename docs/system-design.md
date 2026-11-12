@@ -58,7 +58,6 @@ flowchart TD
 
 client 和 server 都動態連結 **`libutils.so`**：logger、`write_all`、`read_line`、系統資訊擷取與格式化。回應的格式由同一個 `sysinfo_format()` 產生，兩邊不會不一致。
 
-Real Test 用的 `win_client.exe` 是另外用 Winsock 寫的 Windows 版 client，不連結 `libutils.so`，因為 `.so` 只能在 Linux 載入。
 
 ## 3. 執行流程
 
