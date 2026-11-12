@@ -32,17 +32,6 @@ Client 連到 server，用一行文字請求查詢主機的即時系統資訊：
 | 穩健機制，至少 3 個 With/Without 執行範例 | 5 個機制、5 組 With/Without 對照（[第 5 節](#5-五個穩健機制)），每個機制都能用參數關閉，由 `tests/test_robustness.c` 自動跑出對照 |
 | 使用 Makefile 建置 | `Makefile` 提供建置、展示與測試的 target |
 
-評分標準的 A++ 另外要求應用介紹、流程說明、Real Test 和 Auditing discussion，分別在本頁開頭、[系統設計第 1、3 節](docs/system-design.md)、[第 7 節](#7-real-testwindows--wsl2)和 [docs/audit.md](docs/audit.md)。
-
-### 範圍說明
-
-本專案只做期中規定的項目。下列屬於期末專案的內容，這裡刻意不做：
-
-- **自訂的二進位協定（Header + Body）：** 請求和回應都是一行純文字，抓包時直接讀得懂，不需要另外設計封包格式。
-- **多執行緒壓力測試、延遲與吞吐量統計。**
-- **Preforking、Master-Worker、IPC。**
-- **安全性**（checksum、加密、登入）與**可靠度**（心跳、重連、優雅關機、逾時）。
-
 ---
 
 ## 1. 專案架構
