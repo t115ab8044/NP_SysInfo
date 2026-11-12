@@ -56,7 +56,7 @@ flowchart TD
 
 ### 共用函式庫（Shared Library）
 
-client 和 server 都動態連結 **`libutils.so`**：logger、`write_all`、`read_line`、系統資訊擷取與格式化。回應的格式由同一個 `sysinfo_format()` 產生，兩邊不會不一致。
+client 和 server 都動態連結 **`libutils.so`**：logger、`write_all`、`read_line`、系統資訊擷取與格式化。server 的回覆由 `sysinfo_format()` 產生，client 用 `read_line()` 讀回來直接印出。
 
 
 ## 3. 執行流程

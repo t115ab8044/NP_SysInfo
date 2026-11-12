@@ -2,7 +2,7 @@
 
 [← 回到 README](../README.md) ・ [系統設計說明](system-design.md) ・ [關鍵原始碼說明](key-source.md) ・ [稽核討論](audit.md)
 
-以下都是在 WSL2 Ubuntu 上實際執行的畫面。每張圖上方是產生該畫面的指令，在專案資料夾執行即可重現。截圖 3、5、14 都會在 9090 埠啟動 server，執行前要先確定沒有其他 server 在跑。
+除了第 13～15 節的 Wireshark 和 Windows PowerShell 畫面，其他都是在 WSL2 Ubuntu 上實際執行的畫面。每張圖上方是產生該畫面的指令，在專案資料夾執行即可重現。截圖 3、5、14 都會在 9090 埠啟動 server，執行前要先確定沒有其他 server 在跑。
 
 ## 1. 建置與動態函式庫
 
