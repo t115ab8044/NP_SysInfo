@@ -59,16 +59,18 @@ Client 連到 server，用一行文字請求查詢主機的即時系統資訊：
 ### 進程模型
 
 ```text
- client 1 ──┐                                ┌─► child (pid A)：服務 client 1，完成後 _exit
- client 2 ──┼──► server parent ── fork() ────┼─► child (pid B)：服務 client 2，完成後 _exit
-   ...      │    只做 accept()                │       ...
- client N ──┘                                └─► child (pid N)
-                   ▲
-                   └── SIGCHLD → while (waitpid(-1, &status, WNOHANG) > 0) 回收
+ client 1..N ── connect() ──────► server parent   accept → 檢查上限 → fork()
+                                    │      ▲
+                             fork() │      │ SIGCHLD：child 結束時 kernel 通知，
+                                    ▼      │ parent 用 waitpid 迴圈回收
+ client 1 ◄═══ request/reply ═══► child (pid A)   服務 client 1，完成後 _exit
+ client 2 ◄═════════════════════► child (pid B)   服務 client 2，完成後 _exit
+   ...                            ...
+ client N ◄═════════════════════► child (pid N)
 ```
 
 - **parent：** 只負責 `accept()`、`fork()` 和回收子進程。唯一會寫入 client 的情況，是連線數達上限時直接回 `ERROR server busy`（機制 [4]）。
-- **child：** 讀一行請求、回覆、`_exit()`。exit code 代表結束原因，parent 回收時寫進 log。
+- **child：** 讀一行請求、回覆、`_exit()`。連線建立後，請求和回覆直接在 client 和 child 之間傳送，不經過 parent。exit code 代表結束原因，parent 回收時寫進 log。
 
 ### libutils.so 模組
 
@@ -260,9 +262,9 @@ DEBUG     0000  53 59 53 49 4e 46 4f 0a                           |SYSINFO.|
 
 ### [5] 子進程跟著 parent 結束
 
-- **問題：** `SIGKILL` 無法攔截，parent 被 `kill -9` 時來不及通知子進程。子進程會被過繼給 init，繼續執行，沒有人管理。
+- **問題：** `SIGKILL` 無法攔截，parent 被 `kill -9` 時來不及通知子進程。子進程會被過繼給其他進程（WSL2 上是該 session 的 `/init`，不一定是 PID 1），繼續執行，沒有人管理。
 - **作法：** 子進程在 fork 後呼叫 `prctl(PR_SET_PDEATHSIG, SIGTERM)`，parent 一死，kernel 就送 `SIGTERM` 給它。設定後再檢查一次 `getppid()`，處理 parent 在 fork 和 `prctl` 之間就死掉的情況。
-- **關閉後：** 子進程的 PPID 變成 init，繼續把 10 筆資料送完。
+- **關閉後：** 子進程的 PPID 從 parent 變成別的進程（log 中從 1903 變成 1632），繼續把 10 筆資料送完。
 
 ---
 
@@ -437,9 +439,6 @@ request: WATCH 3 500
 | 三個請求 | `SYSINFO` 收到 1 行 `OK`；`WATCH 3 500` 每隔約 500 ms 收到 1 行，共 3 行；`HELLO` 收到 `ERROR unknown request` |
 | Server log | 3 條連線各由一個 child 處理（PID 3333、3334、3335），結束後全部回收，exit code 分別是 0、0、2 |
 | 抓包 | `logs/real_test.pcapng` 共 34 個封包、3 條 TCP 連線；Ethernet 位址是 Hyper-V 虛擬網卡（`00:15:5d:...`），每條連線都有三向交握、請求、回應和雙方的 FIN |
-| 延遲 | 連線建立約 1.3 ms，`SYSINFO` 從連線到收到回覆約 8 ms |
-
-稽核的檢查項目、發現並修正的問題和已知風險，見 [docs/audit.md](docs/audit.md)。
 
 ---
 
@@ -452,6 +451,6 @@ request: WATCH 3 500
 
 - **只支援 Linux：** 用到 `prctl(PR_SET_PDEATHSIG)`、`sysinfo(2)` 和 `/proc/meminfo`。
 - **只支援 IPv4：** server 監聽 `0.0.0.0`，client 用 `AF_INET` 連線。
-- **沒有逾時：** server 和 client 都沒有逾時。連上後不送資料的 client 會一直佔著一個子進程，直到它斷線，機制 [4] 限制這種 client 最多佔用的數量；server 不回應時，client 會一直等到使用者按 `Ctrl+C`。逾時屬於期末的可靠度項目，期中不做。
+- **沒有逾時：** server 和 client 都沒有逾時。連上後不送資料的 client 會一直佔著一個子進程，直到它斷線，機制 [4] 限制這種 client 最多佔用的數量；server 不回應時，client 會一直等到使用者按 `Ctrl+C`。
 - **沒有加密與身分驗證：** 連得上 server 的人都能讀到系統資訊。
 - **`make test-capture` 需要 root 權限。**
