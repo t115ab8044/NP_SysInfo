@@ -58,6 +58,18 @@ char *tl_capture_out(const char *const argv[]);     /* stdout only */
 int tl_start_server(const char *dir, const char *log, const char *const flags[]);
 void tl_stop_server(void);
 
+/*
+ * The 12 different requests of make demo and test_concurrent: client i sends
+ * WATCH <count> <ms> from tl_watches[i % TL_NWATCH]. Every one lasts
+ * (count - 1) x ms = 3 s, so all clients are connected at the same time.
+ */
+#define TL_NWATCH 12
+struct tl_watch {
+    const char *count;          /* ./client -n: number of snapshots */
+    const char *ms;             /* ./client -w: milliseconds between them */
+};
+extern const struct tl_watch tl_watches[TL_NWATCH];
+
 /* /proc */
 int tl_port_in_use(int port);
 int tl_established(int port);

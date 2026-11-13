@@ -20,7 +20,7 @@ make clean && make && ldd ./server ./client | grep -E '^\./|libutils'
 make demo
 ```
 
-12 個 child 同時存在（PPID 都是 parent），12 個 client 由 12 個不同的 PID 服務，錯誤的請求收到 `ERROR`，結束後沒有殭屍程序。
+12 個 client 各送出不同的請求，從 `WATCH 2 3000` 到 `WATCH 31 100`，每條連線都維持 3 秒。12 個 child 同時存在（PPID 都是 parent），12 個 client 由 12 個不同的 PID 服務，每個都收到自己要求的筆數；錯誤的請求收到 `ERROR`，結束後沒有殭屍程序。
 
 ![make demo 結果](screenshots/02_concurrent_demo.png)
 

@@ -24,7 +24,7 @@ Client 連到 server，用一行文字請求查詢主機的即時系統資訊：
 | 期中規定 | 本專案的做法 |
 |---|---|
 | Server 用 `fork()` 處理連線，不可用 thread | parent 只負責 `accept()`，每個連線 fork 一個 child；整個專案沒有使用 thread |
-| 至少同時處理 10 個 client，並提供執行期證明 | `tests/test_concurrent.c` 讓 12 個 client 同時連線，用 `ps aux` 和 `ps --forest` 證明 12 個子進程同時存在 |
+| 至少同時處理 10 個 client，並提供執行期證明 | `tests/test_concurrent.c` 讓 12 個 client 同時連線、各送出不同的 `WATCH` 請求，用 `ps aux` 和 `ps --forest` 證明 12 個子進程同時存在 |
 | 封包擷取與分析 | `tests/test_capture.c` 用 tcpdump 抓 loopback，讀回 pcap 檔，逐包列出三向交握、請求、回應、FIN，並把請求封包拆成 Ethernet、IPv4、TCP 標頭逐欄說明 |
 | 雙層 Debug | 編譯期 `-DENABLE_DEBUG`（關閉時巨集展開成 `((void)0)`），加上執行期 `-d 0/1/2` |
 | 共用函式封裝成 `.so`，兩邊都連結 | logger、`write_all`／`read_line`、系統資訊擷取都在 `libutils.so`，server 和 client 都以 `-lutils` 動態連結 |
@@ -105,7 +105,7 @@ gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -DENABLE_DEBUG -o client client.c 
 |---|---|
 | `make`、`make all` | debug 版（`DEBUG=1`，預設） |
 | `make release` | release 版（`DEBUG=0`，`LOG_DEBUG` 完全編譯掉） |
-| `make demo` | 一個指令的現場展示（約 3 秒）：`.so` 連結、查詢、12 個併發子進程、拒絕錯誤請求、沒有殭屍進程 |
+| `make demo` | 一個指令的現場展示（約 3 秒）：`.so` 連結、查詢、12 個 client 各送出不同的請求（12 個併發子進程）、拒絕錯誤請求、沒有殭屍進程 |
 | `make test` | 依序執行 `test_concurrent`、`test_robustness`、`test_debug` |
 | `make test-concurrent`、`make test-robust`、`make test-debug` | 個別執行一支測試 |
 | `make test-capture` | tcpdump 抓包測試，需要 root 或 sudo |
@@ -274,26 +274,44 @@ DEBUG     0000  53 59 53 49 4e 46 4f 0a                           |SYSINFO.|
 
 | 測試程式 | 證明內容 | 執行方式 | 結果 |
 |---|---|---|---|
-| `tests/test_concurrent.c` | 12 個 client 同時連線，每條連線由不同的子進程處理 | `make test-concurrent` | 9/9 PASS |
+| `tests/test_concurrent.c` | 12 個 client 同時連線、各送出不同的請求，每條連線由不同的子進程處理 | `make test-concurrent` | 9/9 PASS |
 | `tests/test_robustness.c` | 5 個穩健機制的 With/Without 對照 | `make test-robust` | 11/11 PASS |
 | `tests/test_debug.c` | 編譯期與執行期的雙層 Debug | `make test-debug` | 15/15 PASS |
 | `tests/test_capture.c` | tcpdump 抓包、三向交握、標頭欄位 | `make test-capture`（需要 root 或 sudo） | 10/10 PASS |
 
 ### 6.1 test_concurrent：12 個 client 併發
 
-12 個 client 同時送出 `WATCH 6 500`，每條連線約維持 3 秒。測試程式在這段時間內拍下 `ps aux` 和進程樹：
+12 個 client 同時連線，每個送出不同的請求，從 `WATCH 2 3000` 到 `WATCH 31 100`，筆數和間隔都不一樣。每個請求的「(筆數 − 1) × 間隔」都是 3000 ms，所以每條連線都維持 3 秒。測試程式在這段時間內拍下 `ps aux` 和進程樹：
 
 ```text
     PID    PPID STAT     ELAPSED CMD
-    504     484 S+         00:01 ./server -p 9090
-    517     504 S+         00:01  \_ ./server -p 9090
-    518     504 S+         00:01  \_ ./server -p 9090
-    ...                              (共 12 個 child，PPID 都是 504)
+  12061   12041 S+         00:01 ./server -p 9090
+  12074   12061 S+         00:01  \_ ./server -p 9090
+  12075   12061 S+         00:01  \_ ./server -p 9090
+    ...                              (共 12 個 child，PPID 都是 12061)
 server children alive           : 12
 established TCP conns on :9090  : 12
 ```
 
+client 結束後，列出每個 client 的請求、收到幾筆、由哪個 child 回應：
+
+```text
+[client 01] WATCH 2 3000  ->  2 snapshot(s), served by pid=12077
+[client 02] WATCH 3 1500  ->  3 snapshot(s), served by pid=12080
+[client 03] WATCH 4 1000  ->  4 snapshot(s), served by pid=12081
+[client 04] WATCH 5 750   ->  5 snapshot(s), served by pid=12082
+[client 05] WATCH 6 600   ->  6 snapshot(s), served by pid=12078
+[client 06] WATCH 7 500   ->  7 snapshot(s), served by pid=12079
+[client 07] WATCH 9 375   ->  9 snapshot(s), served by pid=12076
+[client 08] WATCH 11 300  -> 11 snapshot(s), served by pid=12074
+[client 09] WATCH 13 250  -> 13 snapshot(s), served by pid=12075
+[client 10] WATCH 16 200  -> 16 snapshot(s), served by pid=12083
+[client 11] WATCH 21 150  -> 21 snapshot(s), served by pid=12084
+[client 12] WATCH 31 100  -> 31 snapshot(s), served by pid=12085
+```
+
 - **ps 證明：** 共 13 個 `./server` 進程（1 個 parent、12 個 child），12 條 ESTABLISHED 連線，server log 出現 `active=12`。
+- **12 種請求同時處理：** 每個 client 收到的筆數都和自己的請求相符（2～31 筆，共 128 筆）；server log 記錄每個 child 收到的請求。
 - **PID 交叉比對：** 12 個 client 收到的 `pid=` 互不相同，而且都出現在 ps 快照中。
 - **結束後：** 0 個殭屍、0 個殘留子進程；server log 記錄 12 筆 accepted、12 筆 reaped。
 
