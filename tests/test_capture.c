@@ -3,15 +3,19 @@
  *                  and read the headers back.
  *
  *   1. start ./server, then tcpdump -i lo -n -w logs/capture.pcap 'tcp port 9090'
- *   2. traffic: SYSINFO, WATCH 3 200 and an unknown request (HELLO)
+ *   2. traffic: SYSINFO, WATCH 3 200, an unknown request (HELLO) and
+ *      WATCH 3 200 with a half close (client --half-close)
  *   3. stop tcpdump and read the capture back:
  *        - tcpdump -r -n -c 10: the first connection (handshake, data, FIN)
  *        - tcpdump -r -n -x -c 4: the same packets in hex
+ *        - tcpdump -r -n 'tcp[13] & 2 == 2': only the SYN packets
  *        - a small pcap reader in C: every packet of the first connection,
  *          then the request packet split field by field into its Ethernet,
- *          IPv4 and TCP headers and the payload
+ *          IPv4 and TCP headers (options included) and the payload
+ *        - tcpdump -r -n 'tcp port <client port>': the half-closed connection
  *   4. checks: three-way handshake, "SYSINFO\n" request, "OK seq=1" reply,
- *      FIN from both sides, the WATCH and ERROR replies
+ *      FIN from both sides, the WATCH and ERROR replies, the SYN filter,
+ *      and the half close (client FIN first, replies still arrive)
  *
  * tcpdump needs root: run the program as root, or it uses sudo for tcpdump.
  * Usage : make test-capture        (env: PORT=9090)
@@ -200,8 +204,12 @@ static int load_pcap(const char *path)
         if (pk->ip[0] >> 4 != 4 || pk->ip[9] != 6)
             continue;                   /* not IPv4 / TCP */
         pk->ihl = (pk->ip[0] & 0x0f) * 4;
+        if (pk->ihl < 20 || g_link_len + pk->ihl + 20 > (int)incl)
+            continue;                   /* headers cut short */
         pk->tcp = pk->ip + pk->ihl;
         pk->tcp_len = (pk->tcp[12] >> 4) * 4;
+        if (pk->tcp_len < 20 || g_link_len + pk->ihl + pk->tcp_len > (int)incl)
+            continue;
         ip_total = (int)rd16(pk->ip + 2);
         pk->payload = pk->tcp + pk->tcp_len;
         pk->payload_len = ip_total - pk->ihl - pk->tcp_len;
@@ -253,6 +261,46 @@ static char *payload_text(const struct packet *pk, int max)
     return s;
 }
 
+/* The TCP options after the 20-byte header, e.g. "NOP, NOP, timestamps ...".
+ * *wscale gets the window-scale shift when the option is present. */
+static char *tcp_options(const struct packet *pk, int *wscale)
+{
+    const unsigned char *o = pk->tcp + 20, *end = pk->tcp + pk->tcp_len;
+    char *s = strdup("");
+
+    while (o < end) {
+        const char *sep = *s ? ", " : "";
+        unsigned kind = o[0], len;
+
+        if (kind == 0) {
+            s = tl_fmt("%s%sEOL", s, sep);
+            break;
+        }
+        if (kind == 1) {
+            s = tl_fmt("%s%sNOP", s, sep);
+            o++;
+            continue;
+        }
+        if (end - o < 2 || (len = o[1]) < 2 || (long)len > end - o)
+            break;
+        if (kind == 2 && len == 4) {
+            s = tl_fmt("%s%sMSS %u", s, sep, rd16(o + 2));
+        } else if (kind == 3 && len == 3) {
+            s = tl_fmt("%s%swindow scale %u", s, sep, o[2]);
+            if (wscale)
+                *wscale = o[2];
+        } else if (kind == 4 && len == 2) {
+            s = tl_fmt("%s%sSACK permitted", s, sep);
+        } else if (kind == 8 && len == 10) {
+            s = tl_fmt("%s%stimestamps val %lu ecr %lu", s, sep, rd32(o + 2), rd32(o + 6));
+        } else {
+            s = tl_fmt("%s%skind %u (%u bytes)", s, sep, kind, len);
+        }
+        o += len;
+    }
+    return s;
+}
+
 static int from_server(const struct packet *pk)
 {
     return (int)pk->sport == tl_port;
@@ -280,8 +328,10 @@ static const char *ip_str(const unsigned char *p)
     return tl_fmt("%u.%u.%u.%u", p[0], p[1], p[2], p[3]);
 }
 
-/* The request packet, one header at a time. */
-static void dissect(const struct packet *pk, unsigned long client_isn, unsigned long server_isn)
+/* The request packet, one header at a time. wscale is the window-scale shift
+ * the client sent in its SYN (-1 if none). */
+static void dissect(const struct packet *pk, unsigned long client_isn, unsigned long server_isn,
+                    int wscale)
 {
     const unsigned char *f = pk->frame, *ip = pk->ip, *tcp = pk->tcp;
 
@@ -306,9 +356,11 @@ static void dissect(const struct packet *pk, unsigned long client_isn, unsigned 
     printf("  IPv4 (%d bytes)\n", pk->ihl);
     printf("    version          %u\n", ip[0] >> 4);
     printf("    header length    %u x 4 = %d bytes\n", ip[0] & 0x0f, pk->ihl);
+    printf("    type of service  0x%02x   (DSCP %u, ECN %u)\n", ip[1], ip[1] >> 2, ip[1] & 3u);
     printf("    total length     %u   (IP header + TCP header + payload)\n", rd16(ip + 2));
     printf("    identification   0x%04x\n", rd16(ip + 4));
     printf("    flags            0x%x%s\n", ip[6] >> 5, (ip[6] & 0x40) ? "   (DF: don't fragment)" : "");
+    printf("    fragment offset  %u\n", rd16(ip + 6) & 0x1fffu);
     printf("    TTL              %u\n", ip[8]);
     printf("    protocol         %u   (TCP)\n", ip[9]);
     printf("    header checksum  0x%04x\n", rd16(ip + 10));
@@ -320,10 +372,21 @@ static void dissect(const struct packet *pk, unsigned long client_isn, unsigned 
     printf("    sequence number  %lu   (relative %lu)\n", pk->seq, pk->seq - client_isn);
     printf("    ack number       %lu   (relative %lu)\n", pk->ack, pk->ack - server_isn);
     printf("    data offset      %u x 4 = %d bytes%s\n", tcp[12] >> 4, pk->tcp_len,
-           pk->tcp_len > 20 ? "   (20 + options, e.g. timestamps)" : "");
+           pk->tcp_len > 20 ? tl_fmt("   (20 + %d bytes of options)", pk->tcp_len - 20) : "");
+    printf("    reserved         %u\n", tcp[12] & 0x0fu);
     printf("    flags            0x%02x   (%s)\n", pk->flags, flag_names(pk->flags));
-    printf("    window           %u\n", pk->window);
+    printf("                     URG %u  ACK %u  PSH %u  RST %u  SYN %u  FIN %u\n",
+           pk->flags >> 5 & 1, pk->flags >> 4 & 1, pk->flags >> 3 & 1,
+           pk->flags >> 2 & 1, pk->flags >> 1 & 1, pk->flags & 1);
+    if (wscale >= 0)
+        printf("    window           %u   (x 2^%d from the SYN's window scale = %lu bytes)\n",
+               pk->window, wscale, (unsigned long)pk->window << wscale);
+    else
+        printf("    window           %u\n", pk->window);
     printf("    checksum         0x%04x\n", rd16(tcp + 16));
+    printf("    urgent pointer   %u\n", rd16(tcp + 18));
+    if (pk->tcp_len > 20)
+        printf("    options          %s\n", tcp_options(pk, NULL));
     printf("  payload (%d bytes)  \"%s\"\n", pk->payload_len, payload_text(pk, 60));
 }
 
@@ -331,13 +394,14 @@ static void dissect(const struct packet *pk, unsigned long client_isn, unsigned 
 
 static int run(void)
 {
-    char *captured_line, *filter = tl_fmt("tcp port %d", tl_port);
+    char *captured_line, *syn_dump, *filter = tl_fmt("tcp port %d", tl_port);
     unsigned cport = 0;
     unsigned long client_isn = 0, server_isn = 0;
     const struct packet *request = NULL, *reply = NULL;
-    int captured, conn[3] = { -1, -1, -1 }, nconn = 0;
+    int captured, conn[4] = { -1, -1, -1, -1 }, nconn = 0;
     int fin_client = 0, fin_server = 0, ok_lines = 0, error_reply = 0, hello = 0;
-    int handshake = 0, all_tcp_v4;
+    int handshake = 0, all_tcp_v4, syn_c = 0, syn_filtered, wscale = -1;
+    int hc_fin = 0, hc_first_ok = 0, hc_ok_after_fin = 0;
 
     tl_banner("Packet capture on loopback (tcpdump) and header analysis");
     printf("date     : %s\n", tl_date());
@@ -372,6 +436,8 @@ static int run(void)
     tl_run("/dev/null", CMD("./client", "-p", tl_port_str, "-n", "3", "-w", "200"));
     printf("$ ./client -p %d -r HELLO       (unknown request)\n", tl_port);
     tl_run("/dev/null", CMD("./client", "-p", tl_port_str, "-r", "HELLO"));
+    printf("$ ./client -p %d -n 3 -w 200 --half-close   (WATCH 3 200, half close)\n", tl_port);
+    tl_run("/dev/null", CMD("./client", "-p", tl_port_str, "-n", "3", "-w", "200", "--half-close"));
     /* libpcap hands packets to tcpdump in batches, about once a second;
      * packets of a batch not handed over yet are lost on Ctrl+C. */
     tl_sleep(2.0);
@@ -390,6 +456,12 @@ static int run(void)
     tl_section("The same packets in hex: tcpdump -r %s -n -x -c 4", PCAP);
     fputs(tl_capture_out(CMD("tcpdump", "-Z", "root", "-r", PCAP, "-n", "-x", "-c", "4")), stdout);
 
+    tl_section("Only the SYN packets: tcpdump -r %s -n 'tcp[13] & 2 == 2'", PCAP);
+    puts("tcp[13] is byte 13 of the TCP header (the flags); 2 is the SYN bit");
+    syn_dump = tl_capture_out(CMD("tcpdump", "-Z", "root", "-r", PCAP, "-n", "tcp[13] & 2 == 2"));
+    fputs(syn_dump, stdout);
+    syn_filtered = tl_nlines(syn_dump);
+
     tl_section("pcap reader: every packet of the first connection");
     if (load_pcap(PCAP) <= 0) {
         puts("cannot read the pcap file");
@@ -400,7 +472,9 @@ static int run(void)
     for (int i = 0; i < g_npk; i++) {
         const struct packet *pk = &g_pk[i];
 
-        if ((pk->flags & (TH_SYN | TH_ACK)) == TH_SYN && nconn < 3)
+        if (pk->flags & TH_SYN)
+            syn_c++;
+        if ((pk->flags & (TH_SYN | TH_ACK)) == TH_SYN && nconn < 4)
             conn[nconn++] = (int)pk->sport;
         if (!from_server(pk) && starts_with(pk, "HELLO\n"))
             hello++;
@@ -418,8 +492,10 @@ static int run(void)
 
         if (pk->sport != cport && pk->dport != cport)
             continue;
-        if (k == 0 && pk->flags == TH_SYN)
+        if (k == 0 && pk->flags == TH_SYN) {
             client_isn = pk->seq;
+            tcp_options(pk, &wscale);   /* the client's window scale */
+        }
         if (from_server(pk) && (pk->flags & TH_SYN))
             server_isn = pk->seq;
         seq = pk->seq - (from_server(pk) ? server_isn : client_isn);
@@ -445,12 +521,39 @@ static int run(void)
     all_tcp_v4 = g_npk == captured;
 
     if (request != NULL)
-        dissect(request, client_isn, server_isn);
+        dissect(request, client_isn, server_isn, wscale);
+
+    if (nconn == 4) {
+        tl_section("Half close (connection 4): tcpdump -r %s -n 'tcp port %d'", PCAP, conn[3]);
+        fputs(tl_capture_out(CMD("tcpdump", "-Z", "root", "-r", PCAP, "-n",
+                                 tl_fmt("tcp port %d", conn[3]))), stdout);
+        /* Number the packets of connection 4 from 1, as in the dump above. */
+        for (int i = 0, k = 0; i < g_npk; i++) {
+            const struct packet *pk = &g_pk[i];
+
+            if (pk->sport != (unsigned)conn[3] && pk->dport != (unsigned)conn[3])
+                continue;
+            k++;
+            if (!from_server(pk) && (pk->flags & TH_FIN) && hc_fin == 0)
+                hc_fin = k;
+            if (from_server(pk) && starts_with(pk, "OK seq=")) {
+                if (hc_first_ok == 0)
+                    hc_first_ok = k;
+                if (hc_fin > 0)
+                    hc_ok_after_fin++;
+            }
+        }
+        printf("client FIN: packet %d; first server reply: packet %d; "
+               "replies after the client's FIN: %d\n", hc_fin, hc_first_ok, hc_ok_after_fin);
+    }
 
     tl_banner("Checks");
     tl_expect(captured > 0, "tcpdump captured packets on lo (%d)", captured);
     tl_expect(all_tcp_v4, "the C pcap reader decoded every captured packet as IPv4/TCP (%d)", g_npk);
-    tl_expect(nconn == 3, "3 connections (3 SYN packets): SYSINFO, WATCH, HELLO");
+    tl_expect(nconn == 4, "4 connections (4 SYN packets): SYSINFO, WATCH, HELLO, half close");
+    tl_expect(syn_filtered == syn_c && syn_c == 2 * nconn,
+              "'tcp[13] & 2 == 2' keeps the %d SYN and SYN+ACK packets the C reader counts",
+              syn_c);
     tl_expect(handshake == 3, "first connection opens with the three-way handshake SYN, SYN+ACK, ACK");
     tl_expect(request != NULL && request->payload_len == 8 && starts_with(request, "SYSINFO\n"),
               "the request payload is the 8 bytes \"SYSINFO\\n\"");
@@ -461,8 +564,10 @@ static int run(void)
               reply->payload[reply->payload_len - 1] == '\n',
               "the reply is one text line \"OK seq=1 pid=... \\n\"");
     tl_expect(fin_client >= 1 && fin_server >= 1, "both sides send FIN to close the connection");
-    tl_expect(ok_lines == 4, "4 \"OK seq=\" segments from the server (1 SYSINFO + 3 WATCH)");
+    tl_expect(ok_lines == 7, "7 \"OK seq=\" segments from the server (1 SYSINFO + 3 WATCH + 3 half close)");
     tl_expect(hello == 1 && error_reply == 1, "\"HELLO\\n\" is answered with \"ERROR unknown request ...\"");
+    tl_expect(hc_fin > 0 && hc_fin < hc_first_ok && hc_ok_after_fin == 3,
+              "half close: the client's FIN comes before the first reply, and all 3 replies still arrive");
 
     tl_section("Open the capture in Wireshark");
     printf("  file          : %s\n", PCAP);

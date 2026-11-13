@@ -4,6 +4,9 @@
  *   ./client                  ask for one snapshot (SYSINFO) and print it
  *   ./client -n 5 -w 1000     WATCH 5 1000: five snapshots, one per second
  *   ./client -r "HELLO"       send any request line, e.g. to see an ERROR reply
+ *   ./client -n 3 -w 200 --half-close
+ *                             half close: shutdown(SHUT_WR) right after the
+ *                             request, then still read every reply
  *   ./client --mode MODE      misbehave on purpose, for the robustness demo:
  *       abort     ask for WATCH 10 200, read one snapshot, then leave   [2]
  *       longline  send a 16 MiB request with no '\n' (size: --mib N)   [3]
@@ -47,7 +50,8 @@ static struct {
     const char *request;        /* -r, NULL = build SYSINFO or WATCH */
     int mib;                    /* size of the longline request */
     enum client_mode mode;
-} g_cfg = { "127.0.0.1", DEFAULT_PORT, -1, -1, NULL, 16, MODE_NORMAL };
+    int half_close;             /* --half-close */
+} g_cfg = { "127.0.0.1", DEFAULT_PORT, -1, -1, NULL, 16, MODE_NORMAL, 0 };
 
 static double now_sec(void)
 {
@@ -132,6 +136,15 @@ static int run_normal(int fd)
     LOG_INFO("request: %.*s", (int)strcspn(request, "\n"), request);
     if (send_request(fd, request) < 0)
         return CLIENT_FAIL;
+    if (g_cfg.half_close) {
+        /* Half close: send our FIN now. Only the sending direction is shut,
+         * so the server still reads the request and its replies still arrive. */
+        if (shutdown(fd, SHUT_WR) < 0) {
+            LOG_ERROR("shutdown(SHUT_WR) failed: %s", strerror(errno));
+            return CLIENT_FAIL;
+        }
+        LOG_INFO("half close: shutdown(SHUT_WR) sent FIN, still reading the replies");
+    }
 
     if (expected < 1)
         until_eof = 1;                  /* the server will answer with an ERROR */
@@ -238,13 +251,14 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [-H HOST] [-p PORT] [-d LEVEL] [-n COUNT] [-w MS]\n"
-            "          [-r LINE] [--mode abort|longline|idle] [--mib N]\n"
+            "          [-r LINE] [--half-close] [--mode abort|longline|idle] [--mib N]\n"
             "  -H, --host HOST      server address (default 127.0.0.1)\n"
             "  -p, --port PORT      server port (default %d)\n"
             "  -d, --debug LEVEL    0 normal, 1 program flow, 2 flow + bytes (debug build only)\n"
             "  -n, --count COUNT    WATCH: number of snapshots (default %d)\n"
             "  -w, --interval MS    WATCH: milliseconds between snapshots (default %d)\n"
             "  -r, --request LINE   send LINE as the request\n"
+            "  --half-close         shutdown(SHUT_WR) after the request, keep reading replies\n"
             "  --mode MODE          abort [2], longline [3] or idle [4]\n"
             "  --mib N              longline: request size in MiB (default 16)\n",
             prog, DEFAULT_PORT, DEFAULT_COUNT, DEFAULT_MS);
@@ -261,6 +275,7 @@ static int parse_args(int argc, char *argv[])
         { "request",  required_argument, NULL, 'r' },
         { "mode",     required_argument, NULL, 1 },
         { "mib",      required_argument, NULL, 2 },
+        { "half-close", no_argument,     NULL, 3 },
         { "help",     no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
@@ -308,6 +323,9 @@ static int parse_args(int argc, char *argv[])
         case 2:
             if (parse_int_range(optarg, 1, 1024, &g_cfg.mib) < 0)
                 goto bad;
+            break;
+        case 3:
+            g_cfg.half_close = 1;
             break;
         case 'h':
             usage(argv[0]);

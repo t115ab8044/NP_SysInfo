@@ -114,7 +114,7 @@ sed -n '/With \/ Without summary/,$p' logs/test_robustness.log
 tcpdump -r logs/capture.pcap -n -c 10
 ```
 
-三向交握（`[S]`、`[S.]`、`[.]`）、8 bytes 的請求、107 bytes 的回應，最後雙方各送一次 FIN（`[F.]`）。
+測試程式抓到的第一條連線（`SYSINFO`）：三向交握（`[S]`、`[S.]`、`[.]`）、8 bytes 的請求、109 bytes 的回應，最後雙方各送一次 FIN（`[F.]`）。
 
 ![tcpdump 讀回抓包檔](screenshots/11_tcpdump.png)
 
@@ -124,7 +124,7 @@ tcpdump -r logs/capture.pcap -n -c 10
 sed -n '/Bytes of the request packet/,/payload (8 bytes)/p' logs/test_capture.log
 ```
 
-測試程式直接讀 pcap 檔，把請求封包拆成 Ethernet（14 bytes）、IPv4（20 bytes）、TCP（32 bytes）和 payload（`SYSINFO\n`），逐欄說明。
+測試程式直接讀 pcap 檔，把請求封包拆成 Ethernet（14 bytes）、IPv4（20 bytes）、TCP（32 bytes）和 payload（`SYSINFO\n`），逐欄說明。IPv4 包含 type of service 和 fragment offset；TCP 包含 data offset、reserved、6 個 flag 位元（`URG 0 ACK 1 PSH 1 RST 0 SYN 0 FIN 0`）、乘上 window scale 後的視窗大小（64 × 2^10 = 65536 bytes）、urgent pointer，以及選項（NOP、NOP、timestamps）。
 
 ![請求封包的標頭欄位](screenshots/12_header_fields.png)
 
@@ -165,3 +165,23 @@ Windows PowerShell，在專案資料夾執行，IP 換成上面 `hostname -I` �
 用 Wireshark 開啟 `logs/real_test.pcapng`（共 34 個封包、3 條連線），display filter 輸入 `tcp.stream eq 0`，只看第一條連線（`SYSINFO`）的 10 個封包：三向交握、8 bytes 的請求、108 bytes 的回應，以及雙方的 FIN。來源和目的地是 `172.17.96.1` 和 `172.17.107.87`。選第 4 個封包（`[PSH, ACK]`，Len=8），下方的 Ethernet II 位址是 Hyper-V 虛擬網卡（`00:15:5d:...`），表示封包走的是虛擬網路，不是 loopback；右邊的 hex 結尾是 `53 59 53 49 4e 46 4f 0a`（`SYSINFO\n`）。
 
 ![Real Test 的 Wireshark 抓包](screenshots/15_real_wireshark.png)
+
+## 16. tcpdump 過濾 SYN 封包
+
+```bash
+tcpdump -r logs/capture.pcap -n 'tcp[13] & 2 == 2'
+```
+
+`tcp[13]` 是 TCP 標頭第 13 個 byte，也就是 flags；`& 2` 取出 SYN 位元。抓包檔裡有 4 條連線，所以只剩 8 個封包：每條連線的 `[S]` 和 `[S.]` 各一個。SYN 封包帶著 MSS、SACK permitted、timestamp 和 window scale 等選項。
+
+![只留下 SYN 和 SYN+ACK](screenshots/16_syn_filter.png)
+
+## 17. 半關閉（half close）
+
+```bash
+sed -n '/Half close (connection 4)/,/replies after/p' logs/test_capture.log
+```
+
+第 4 條連線是 `./client -n 3 -w 200 --half-close`。client 送出 `WATCH 3 200`（length 12）之後呼叫 `shutdown(fd, SHUT_WR)`，第 6 個封包就是 client 的 `[F.]`，這時 server 還沒有回覆。之後 server 仍然每隔 200 ms 送出一行（第 7、9、11 個封包，各 109 bytes），送完才送出自己的 `[F.]`。TCP 的兩個方向可以分開關閉：client 不再送資料，但還能繼續接收。
+
+![半關閉的連線](screenshots/17_half_close.png)

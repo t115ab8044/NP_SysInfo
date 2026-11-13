@@ -25,7 +25,7 @@ Client 連到 server，用一行文字請求查詢主機的即時系統資訊：
 |---|---|
 | Server 用 `fork()` 處理連線，不可用 thread | parent 只負責 `accept()`，每個連線 fork 一個 child；整個專案沒有使用 thread |
 | 至少同時處理 10 個 client，並提供執行期證明 | `tests/test_concurrent.c` 讓 12 個 client 同時連線、各送出不同的 `WATCH` 請求，用 `ps aux` 和 `ps --forest` 證明 12 個子進程同時存在 |
-| 封包擷取與分析 | `tests/test_capture.c` 用 tcpdump 抓 loopback，讀回 pcap 檔，逐包列出三向交握、請求、回應、FIN，並把請求封包拆成 Ethernet、IPv4、TCP 標頭逐欄說明 |
+| 封包擷取與分析 | `tests/test_capture.c` 用 tcpdump 抓 loopback，讀回 pcap 檔，逐包列出三向交握、請求、回應、FIN，用 `tcp[13] & 2 == 2` 只留下 SYN 封包，把請求封包拆成 Ethernet、IPv4、TCP 標頭逐欄說明，並抓下 client 用 `--half-close` 半關閉的連線 |
 | 雙層 Debug | 編譯期 `-DENABLE_DEBUG`（關閉時巨集展開成 `((void)0)`），加上執行期 `-d 0/1/2` |
 | 共用函式封裝成 `.so`，兩邊都連結 | logger、`write_all`／`read_line`、系統資訊擷取都在 `libutils.so`，server 和 client 都以 `-lutils` 動態連結 |
 | Client 向 server 請求系統資訊 | `SYSINFO` 查一次，`WATCH <次數> <毫秒>` 連續回報 |
@@ -110,7 +110,7 @@ gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -DENABLE_DEBUG -o client client.c 
 | `make test-concurrent`、`make test-robust`、`make test-debug` | 個別執行一支測試 |
 | `make test-capture` | tcpdump 抓包測試，需要 root 或 sudo |
 | `make inspect` | 列出 `libutils.so` 匯出的符號，以及 `ldd` 連結結果 |
-| `make capture` | 用 `sudo tcpdump -i lo -n -x` 即時顯示 port 9090 的流量 |
+| `make capture` | 用 `sudo tcpdump -i lo -l -vn -e -x 'tcp port 9090'` 即時顯示 port 9090 的流量：`-l` 逐行輸出、`-v` 顯示 IP 標頭的 tos／ttl／id／checksum、`-n` 不反查名稱、`-e` 顯示 MAC 和 EtherType、`-x` 顯示 hex |
 | `make win-client` | 用 mingw-w64 編出 Real Test 用的 `win_client.exe`（[第 7 節](#7-real-testwindows--wsl2)） |
 | `make clean` | 刪除 `.so`、執行檔與測試程式 |
 
@@ -169,6 +169,7 @@ OK seq=1 pid=556 host=LAPTOP-0F0NVT4H up=0d 00:00:30 load=0.11/0.03/0.01 mem_ava
 ./client                      # SYSINFO：查詢一次
 ./client -n 5 -w 1000         # WATCH 5 1000：每秒一行，共 5 行
 ./client -r HELLO             # 送出任意一行，觀察 ERROR 回覆
+./client -n 3 -w 200 --half-close   # 送完請求就半關閉，仍然收到 3 行
 ./client --mode abort         # 故障模擬，見下表
 ```
 
@@ -179,6 +180,7 @@ OK seq=1 pid=556 host=LAPTOP-0F0NVT4H up=0d 00:00:30 load=0.11/0.03/0.01 mem_ava
 | `-d, --debug LEVEL` | 執行期 debug 等級 0/1/2 |
 | `-n, --count N`、`-w, --interval MS` | 改送 `WATCH N MS`（預設 5 次、1000 ms） |
 | `-r, --request LINE` | 把 LINE 當成請求送出 |
+| `--half-close` | 送完請求後呼叫 `shutdown(fd, SHUT_WR)`：只關閉送出的方向（送出 FIN），仍然繼續讀取回覆 |
 | `--mode MODE` | 故障模擬，見下表 |
 | `--mib N` | `longline` 模式送出的資料量（預設 16 MiB） |
 
@@ -277,7 +279,7 @@ DEBUG     0000  53 59 53 49 4e 46 4f 0a                           |SYSINFO.|
 | `tests/test_concurrent.c` | 12 個 client 同時連線、各送出不同的請求，每條連線由不同的子進程處理 | `make test-concurrent` | 9/9 PASS |
 | `tests/test_robustness.c` | 5 個穩健機制的 With/Without 對照 | `make test-robust` | 11/11 PASS |
 | `tests/test_debug.c` | 編譯期與執行期的雙層 Debug | `make test-debug` | 15/15 PASS |
-| `tests/test_capture.c` | tcpdump 抓包、三向交握、標頭欄位 | `make test-capture`（需要 root 或 sudo） | 10/10 PASS |
+| `tests/test_capture.c` | tcpdump 抓包、三向交握、SYN 過濾、標頭欄位、半關閉 | `make test-capture`（需要 root 或 sudo） | 12/12 PASS |
 
 ### 6.1 test_concurrent：12 個 client 併發
 
@@ -357,37 +359,62 @@ debug 版處理一次 `SYSINFO` 時，server log 的行數：
 
 ### 6.4 test_capture：tcpdump 抓包與標頭分析
 
-測試程式在 `lo` 上執行 `tcpdump -i lo -n -w logs/capture.pcap 'tcp port 9090'`，期間送出 `SYSINFO`、`WATCH 3 200` 和 `HELLO` 三個請求，結束後：
+測試程式在 `lo` 上執行 `tcpdump -i lo -n -w logs/capture.pcap 'tcp port 9090'`，期間建立 4 條連線，共 48 個封包：
+
+| 連線 | client 指令 | 請求 | 用來觀察 |
+|---|---|---|---|
+| 1 | `./client` | `SYSINFO` | 三向交握、一問一答、雙方的 FIN |
+| 2 | `./client -n 3 -w 200` | `WATCH 3 200` | 一個請求、3 個回覆 |
+| 3 | `./client -r HELLO` | `HELLO` | `ERROR unknown request` |
+| 4 | `./client -n 3 -w 200 --half-close` | `WATCH 3 200` | 半關閉：client 先送 FIN，仍然收到 3 個回覆 |
+
+結束後依序：
 
 1. `tcpdump -r logs/capture.pcap -n -c 10` 逐包列出第一條連線。
 2. `tcpdump -r ... -n -x -c 4` 顯示前 4 個封包的 hex。
-3. 測試程式內建的 pcap 讀取器（24-byte 檔頭、每包 16-byte 紀錄頭）逐包解析，並把請求封包拆成各層標頭：
+3. `tcpdump -r ... -n 'tcp[13] & 2 == 2'` 只留下 SYN 和 SYN+ACK：`tcp[13]` 是 TCP 標頭第 13 個 byte（flags），`2` 是 SYN 位元。4 條連線各 2 個，共 8 個封包，和測試程式自己數的一致。
+4. 測試程式內建的 pcap 讀取器（24-byte 檔頭、每包 16-byte 紀錄頭）逐包解析，並把請求封包拆成各層標頭，逐欄說明。
+5. `tcpdump -r ... -n 'tcp port <連線 4 的 client port>'` 列出半關閉的那條連線。
 
 ```text
   #   time      dir   flags         rel seq  rel ack  len  payload
   1    0.000000 C->S  SYN                 0        0    0
   2    0.000011 S->C  SYN+ACK             0        1    0
   3    0.000019 C->S  ACK                 1        1    0
-  4    0.000094 C->S  PSH+ACK             1        1    8  SYSINFO\n
-  5    0.000097 S->C  ACK                 1        9    0
-  6    0.001503 S->C  PSH+ACK             1        9  107  OK seq=1 pid=717 host=LAPTOP-0F0...
-  7    0.001526 C->S  ACK                 9      108    0
-  8    0.001533 S->C  FIN+ACK           108        9    0
-  9    0.001620 C->S  FIN+ACK             9      109    0
-  10   0.001647 S->C  ACK               109       10    0
+  4    0.000132 C->S  PSH+ACK             1        1    8  SYSINFO\n
+  5    0.000136 S->C  ACK                 1        9    0
+  6    0.001243 S->C  PSH+ACK             1        9  109  OK seq=1 pid=12849 host=LAPTOP-0...
+  7    0.001267 C->S  ACK                 9      110    0
+  8    0.001275 S->C  FIN+ACK           110        9    0
+  9    0.001332 C->S  FIN+ACK             9      111    0
+  10   0.001347 S->C  ACK               111       10    0
 
   Ethernet 0x0000:  00 00 00 00 00 00 00 00 00 00 00 00 08 00
-  IPv4     0x000e:  45 00 00 3c b8 41 40 00 40 06 84 78 7f 00 00 01
+  IPv4     0x000e:  45 00 00 3c 07 38 40 00 40 06 35 82 7f 00 00 01
            0x001e:  7f 00 00 01
-  TCP      0x0022:  e5 ea 23 82 20 51 df 63 c1 57 7d 2d 80 18 00 40
-           0x0032:  fe 30 00 00 01 01 08 0a 00 31 a7 a0 c5 13 a4 5c
+  TCP      0x0022:  de ca 23 82 71 ab e1 5b 15 e5 eb b5 80 18 00 40
+           0x0032:  fe 30 00 00 01 01 08 0a 33 b0 bb 14 30 dd 57 b7
   payload  0x0042:  53 59 53 49 4e 46 4f 0a
 ```
 
-- **三向交握：** SYN → SYN+ACK → ACK。
-- **資料：** 請求 8 bytes（`SYSINFO\n`），回應 107 bytes（一行 `OK ...`）。
+- **三向交握：** SYN → SYN+ACK → ACK。SYN 帶著 MSS 65495、SACK permitted、timestamp 和 window scale 10 這些選項。
+- **資料：** 請求 8 bytes（`SYSINFO\n`），回應 109 bytes（一行 `OK ...`）。
 - **關閉：** server 先送 FIN（子進程處理完就關閉），client 回 FIN，各自 ACK。
-- **標頭欄位：** IPv4 標頭 20 bytes（`45` = version 4、IHL 5），protocol 6 是 TCP；TCP 標頭 32 bytes（20 bytes 加上 timestamp 選項），flags `0x18` = PSH+ACK。
+- **IPv4 標頭（20 bytes）：** version 4、IHL 5、type of service `0x00`、total length 60、identification、flags `0x2`（DF）、fragment offset 0、TTL 64、protocol 6（TCP）、header checksum、來源和目的位址。
+- **TCP 標頭（32 bytes）：** 來源和目的 port、sequence 和 ack number、data offset 8（20 bytes 加上 12 bytes 的選項）、reserved、flags `0x18`（逐位元列出 `URG 0 ACK 1 PSH 1 RST 0 SYN 0 FIN 0`）、window 64（乘上 SYN 協商的 2^10 = 65536 bytes）、checksum、urgent pointer，以及選項（NOP、NOP、timestamps）。
+
+**半關閉（連線 4）：** client 送出 `WATCH 3 200` 後呼叫 `shutdown(fd, SHUT_WR)`，只關閉自己送出的方向。tcpdump 看到的順序：
+
+```text
+#4  client -> server  [P.]  length 12   WATCH 3 200\n
+#6  client -> server  [F.]              client 的 FIN，此時 server 還沒回覆
+#7  server -> client  [P.]  length 109  OK seq=1 ...
+#9  server -> client  [P.]  length 109  OK seq=2 ...（200 ms 後）
+#11 server -> client  [P.]  length 109  OK seq=3 ...（再 200 ms 後）
+#13 server -> client  [F.]              server 送完才關閉
+```
+
+client 的 FIN 出現在 server 第一個回覆之前，之後 3 個回覆仍然送達，表示 TCP 的兩個方向可以分開關閉。server 讀完一行請求後就不再讀取，所以 client 提早送 FIN 不影響回覆。
 
 **用 Wireshark 開啟：** `logs/capture.pcap`，display filter 輸入 `tcp.port == 9090`，對封包按右鍵選 Follow → TCP Stream，就能看到請求和回應的文字。
 

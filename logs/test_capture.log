@@ -2,13 +2,13 @@
 ==============================================================================
  Packet capture on loopback (tcpdump) and header analysis
 ==============================================================================
-date     : 2026-11-12 15:28:30
+date     : 2026-11-13 23:14:40
 kernel   : Linux 6.18.33.2-microsoft-standard-WSL2
 tcpdump  : tcpdump version 4.99.6
-privilege: sudo
+privilege: running as root
 
 --- Start server and tcpdump ---
-$ ./server -p 9090                     -> pid 708
+$ ./server -p 9090                     -> pid 12846
 $ tcpdump -i lo -n -w logs/capture.pcap 'tcp port 9090'
 tcpdump: listening on lo, link-type EN10MB (Ethernet), snapshot length 262144 bytes
 
@@ -16,66 +16,78 @@ tcpdump: listening on lo, link-type EN10MB (Ethernet), snapshot length 262144 by
 $ ./client -p 9090                (SYSINFO)
 $ ./client -p 9090 -n 3 -w 200    (WATCH 3 200)
 $ ./client -p 9090 -r HELLO       (unknown request)
+$ ./client -p 9090 -n 3 -w 200 --half-close   (WATCH 3 200, half close)
 
 --- Stop tcpdump (Ctrl+C = SIGINT) ---
-34 packets captured
-68 packets received by filter
+48 packets captured
+96 packets received by filter
 0 packets dropped by kernel
 
 --- First connection, packet by packet: tcpdump -r logs/capture.pcap -n -c 10 ---
-15:28:30.844923 IP 127.0.0.1.58858 > 127.0.0.1.9090: Flags [S], seq 542236514, win 65495, options [mss 65495,sackOK,TS val 3254176 ecr 0,nop,wscale 10], length 0
-15:28:30.844934 IP 127.0.0.1.9090 > 127.0.0.1.58858: Flags [S.], seq 3243736364, ack 542236515, win 65483, options [mss 65495,sackOK,TS val 3306398812 ecr 3254176,nop,wscale 10], length 0
-15:28:30.844942 IP 127.0.0.1.58858 > 127.0.0.1.9090: Flags [.], ack 1, win 64, options [nop,nop,TS val 3254176 ecr 3306398812], length 0
-15:28:30.845017 IP 127.0.0.1.58858 > 127.0.0.1.9090: Flags [P.], seq 1:9, ack 1, win 64, options [nop,nop,TS val 3254176 ecr 3306398812], length 8
-15:28:30.845020 IP 127.0.0.1.9090 > 127.0.0.1.58858: Flags [.], ack 9, win 64, options [nop,nop,TS val 3306398812 ecr 3254176], length 0
-15:28:30.846426 IP 127.0.0.1.9090 > 127.0.0.1.58858: Flags [P.], seq 1:108, ack 9, win 64, options [nop,nop,TS val 3306398813 ecr 3254176], length 107
-15:28:30.846449 IP 127.0.0.1.58858 > 127.0.0.1.9090: Flags [.], ack 108, win 64, options [nop,nop,TS val 3254177 ecr 3306398813], length 0
-15:28:30.846456 IP 127.0.0.1.9090 > 127.0.0.1.58858: Flags [F.], seq 108, ack 9, win 64, options [nop,nop,TS val 3306398813 ecr 3254177], length 0
-15:28:30.846543 IP 127.0.0.1.58858 > 127.0.0.1.9090: Flags [F.], seq 9, ack 109, win 64, options [nop,nop,TS val 3254177 ecr 3306398813], length 0
-15:28:30.846570 IP 127.0.0.1.9090 > 127.0.0.1.58858: Flags [.], ack 10, win 64, options [nop,nop,TS val 3306398813 ecr 3254177], length 0
+23:14:40.837072 IP 127.0.0.1.57034 > 127.0.0.1.9090: Flags [S], seq 1907089754, win 65495, options [mss 65495,sackOK,TS val 867220244 ecr 0,nop,wscale 10], length 0
+23:14:40.837083 IP 127.0.0.1.9090 > 127.0.0.1.57034: Flags [S.], seq 367389620, ack 1907089755, win 65483, options [mss 65495,sackOK,TS val 819812279 ecr 867220244,nop,wscale 10], length 0
+23:14:40.837091 IP 127.0.0.1.57034 > 127.0.0.1.9090: Flags [.], ack 1, win 64, options [nop,nop,TS val 867220244 ecr 819812279], length 0
+23:14:40.837204 IP 127.0.0.1.57034 > 127.0.0.1.9090: Flags [P.], seq 1:9, ack 1, win 64, options [nop,nop,TS val 867220244 ecr 819812279], length 8
+23:14:40.837208 IP 127.0.0.1.9090 > 127.0.0.1.57034: Flags [.], ack 9, win 64, options [nop,nop,TS val 819812279 ecr 867220244], length 0
+23:14:40.838315 IP 127.0.0.1.9090 > 127.0.0.1.57034: Flags [P.], seq 1:110, ack 9, win 64, options [nop,nop,TS val 819812280 ecr 867220244], length 109
+23:14:40.838339 IP 127.0.0.1.57034 > 127.0.0.1.9090: Flags [.], ack 110, win 64, options [nop,nop,TS val 867220245 ecr 819812280], length 0
+23:14:40.838347 IP 127.0.0.1.9090 > 127.0.0.1.57034: Flags [F.], seq 110, ack 9, win 64, options [nop,nop,TS val 819812280 ecr 867220245], length 0
+23:14:40.838404 IP 127.0.0.1.57034 > 127.0.0.1.9090: Flags [F.], seq 9, ack 111, win 64, options [nop,nop,TS val 867220245 ecr 819812280], length 0
+23:14:40.838419 IP 127.0.0.1.9090 > 127.0.0.1.57034: Flags [.], ack 10, win 64, options [nop,nop,TS val 819812280 ecr 867220245], length 0
 
 --- The same packets in hex: tcpdump -r logs/capture.pcap -n -x -c 4 ---
-15:28:30.844923 IP 127.0.0.1.58858 > 127.0.0.1.9090: Flags [S], seq 542236514, win 65495, options [mss 65495,sackOK,TS val 3254176 ecr 0,nop,wscale 10], length 0
-	0x0000:  4500 003c b83f 4000 4006 847a 7f00 0001
-	0x0010:  7f00 0001 e5ea 2382 2051 df62 0000 0000
+23:14:40.837072 IP 127.0.0.1.57034 > 127.0.0.1.9090: Flags [S], seq 1907089754, win 65495, options [mss 65495,sackOK,TS val 867220244 ecr 0,nop,wscale 10], length 0
+	0x0000:  4500 003c 0736 4000 4006 3584 7f00 0001
+	0x0010:  7f00 0001 deca 2382 71ab e15a 0000 0000
 	0x0020:  a002 ffd7 fe30 0000 0204 ffd7 0402 080a
-	0x0030:  0031 a7a0 0000 0000 0103 030a
-15:28:30.844934 IP 127.0.0.1.9090 > 127.0.0.1.58858: Flags [S.], seq 3243736364, ack 542236515, win 65483, options [mss 65495,sackOK,TS val 3306398812 ecr 3254176,nop,wscale 10], length 0
+	0x0030:  33b0 bb14 0000 0000 0103 030a
+23:14:40.837083 IP 127.0.0.1.9090 > 127.0.0.1.57034: Flags [S.], seq 367389620, ack 1907089755, win 65483, options [mss 65495,sackOK,TS val 819812279 ecr 867220244,nop,wscale 10], length 0
 	0x0000:  4500 003c 0000 4000 4006 3cba 7f00 0001
-	0x0010:  7f00 0001 2382 e5ea c157 7d2c 2051 df63
+	0x0010:  7f00 0001 2382 deca 15e5 ebb4 71ab e15b
 	0x0020:  a012 ffcb fe30 0000 0204 ffd7 0402 080a
-	0x0030:  c513 a45c 0031 a7a0 0103 030a
-15:28:30.844942 IP 127.0.0.1.58858 > 127.0.0.1.9090: Flags [.], ack 1, win 64, options [nop,nop,TS val 3254176 ecr 3306398812], length 0
-	0x0000:  4500 0034 b840 4000 4006 8481 7f00 0001
-	0x0010:  7f00 0001 e5ea 2382 2051 df63 c157 7d2d
-	0x0020:  8010 0040 fe28 0000 0101 080a 0031 a7a0
-	0x0030:  c513 a45c
-15:28:30.845017 IP 127.0.0.1.58858 > 127.0.0.1.9090: Flags [P.], seq 1:9, ack 1, win 64, options [nop,nop,TS val 3254176 ecr 3306398812], length 8
-	0x0000:  4500 003c b841 4000 4006 8478 7f00 0001
-	0x0010:  7f00 0001 e5ea 2382 2051 df63 c157 7d2d
-	0x0020:  8018 0040 fe30 0000 0101 080a 0031 a7a0
-	0x0030:  c513 a45c 5359 5349 4e46 4f0a
+	0x0030:  30dd 57b7 33b0 bb14 0103 030a
+23:14:40.837091 IP 127.0.0.1.57034 > 127.0.0.1.9090: Flags [.], ack 1, win 64, options [nop,nop,TS val 867220244 ecr 819812279], length 0
+	0x0000:  4500 0034 0737 4000 4006 358b 7f00 0001
+	0x0010:  7f00 0001 deca 2382 71ab e15b 15e5 ebb5
+	0x0020:  8010 0040 fe28 0000 0101 080a 33b0 bb14
+	0x0030:  30dd 57b7
+23:14:40.837204 IP 127.0.0.1.57034 > 127.0.0.1.9090: Flags [P.], seq 1:9, ack 1, win 64, options [nop,nop,TS val 867220244 ecr 819812279], length 8
+	0x0000:  4500 003c 0738 4000 4006 3582 7f00 0001
+	0x0010:  7f00 0001 deca 2382 71ab e15b 15e5 ebb5
+	0x0020:  8018 0040 fe30 0000 0101 080a 33b0 bb14
+	0x0030:  30dd 57b7 5359 5349 4e46 4f0a
+
+--- Only the SYN packets: tcpdump -r logs/capture.pcap -n 'tcp[13] & 2 == 2' ---
+tcp[13] is byte 13 of the TCP header (the flags); 2 is the SYN bit
+23:14:40.837072 IP 127.0.0.1.57034 > 127.0.0.1.9090: Flags [S], seq 1907089754, win 65495, options [mss 65495,sackOK,TS val 867220244 ecr 0,nop,wscale 10], length 0
+23:14:40.837083 IP 127.0.0.1.9090 > 127.0.0.1.57034: Flags [S.], seq 367389620, ack 1907089755, win 65483, options [mss 65495,sackOK,TS val 819812279 ecr 867220244,nop,wscale 10], length 0
+23:14:40.843505 IP 127.0.0.1.57040 > 127.0.0.1.9090: Flags [S], seq 2944041030, win 65495, options [mss 65495,sackOK,TS val 74227696 ecr 0,nop,wscale 10], length 0
+23:14:40.843569 IP 127.0.0.1.9090 > 127.0.0.1.57040: Flags [S.], seq 819704648, ack 2944041031, win 65483, options [mss 65495,sackOK,TS val 4098139838 ecr 74227696,nop,wscale 10], length 0
+23:14:41.257963 IP 127.0.0.1.57044 > 127.0.0.1.9090: Flags [S], seq 890321039, win 65495, options [mss 65495,sackOK,TS val 1949047289 ecr 0,nop,wscale 10], length 0
+23:14:41.257981 IP 127.0.0.1.9090 > 127.0.0.1.57044: Flags [S.], seq 2014519292, ack 890321040, win 65483, options [mss 65495,sackOK,TS val 4173645934 ecr 1949047289,nop,wscale 10], length 0
+23:14:41.264608 IP 127.0.0.1.57046 > 127.0.0.1.9090: Flags [S], seq 1835455881, win 65495, options [mss 65495,sackOK,TS val 4026402761 ecr 0,nop,wscale 10], length 0
+23:14:41.264619 IP 127.0.0.1.9090 > 127.0.0.1.57046: Flags [S.], seq 2650399583, ack 1835455882, win 65483, options [mss 65495,sackOK,TS val 76088618 ecr 4026402761,nop,wscale 10], length 0
 
 --- pcap reader: every packet of the first connection ---
-link type 1 (Ethernet), 34 TCP/IPv4 packets in the file
+link type 1 (Ethernet), 48 TCP/IPv4 packets in the file
   #   time      dir   flags         rel seq  rel ack  len  payload
   1    0.000000 C->S  SYN                 0        0    0  
   2    0.000011 S->C  SYN+ACK             0        1    0  
   3    0.000019 C->S  ACK                 1        1    0  
-  4    0.000094 C->S  PSH+ACK             1        1    8  SYSINFO\n
-  5    0.000097 S->C  ACK                 1        9    0  
-  6    0.001503 S->C  PSH+ACK             1        9  107  OK seq=1 pid=717 host=LAPTOP-0F0...
-  7    0.001526 C->S  ACK                 9      108    0  
-  8    0.001533 S->C  FIN+ACK           108        9    0  
-  9    0.001620 C->S  FIN+ACK             9      109    0  
-  10   0.001647 S->C  ACK               109       10    0  
+  4    0.000132 C->S  PSH+ACK             1        1    8  SYSINFO\n
+  5    0.000136 S->C  ACK                 1        9    0  
+  6    0.001243 S->C  PSH+ACK             1        9  109  OK seq=1 pid=12849 host=LAPTOP-0...
+  7    0.001267 C->S  ACK                 9      110    0  
+  8    0.001275 S->C  FIN+ACK           110        9    0  
+  9    0.001332 C->S  FIN+ACK             9      111    0  
+  10   0.001347 S->C  ACK               111       10    0  
 
 --- Bytes of the request packet, split at the header boundaries ---
   Ethernet 0x0000:  00 00 00 00 00 00 00 00 00 00 00 00 08 00
-  IPv4     0x000e:  45 00 00 3c b8 41 40 00 40 06 84 78 7f 00 00 01
+  IPv4     0x000e:  45 00 00 3c 07 38 40 00 40 06 35 82 7f 00 00 01
            0x001e:  7f 00 00 01
-  TCP      0x0022:  e5 ea 23 82 20 51 df 63 c1 57 7d 2d 80 18 00 40
-           0x0032:  fe 30 00 00 01 01 08 0a 00 31 a7 a0 c5 13 a4 5c
+  TCP      0x0022:  de ca 23 82 71 ab e1 5b 15 e5 eb b5 80 18 00 40
+           0x0032:  fe 30 00 00 01 01 08 0a 33 b0 bb 14 30 dd 57 b7
   payload  0x0042:  53 59 53 49 4e 46 4f 0a
 
 --- Header fields of the request packet ---
@@ -86,38 +98,63 @@ link type 1 (Ethernet), 34 TCP/IPv4 packets in the file
   IPv4 (20 bytes)
     version          4
     header length    5 x 4 = 20 bytes
+    type of service  0x00   (DSCP 0, ECN 0)
     total length     60   (IP header + TCP header + payload)
-    identification   0xb841
+    identification   0x0738
     flags            0x2   (DF: don't fragment)
+    fragment offset  0
     TTL              64
     protocol         6   (TCP)
-    header checksum  0x8478
+    header checksum  0x3582
     source           127.0.0.1
     destination      127.0.0.1
   TCP (32 bytes)
-    source port      58858   (client, chosen by the kernel)
+    source port      57034   (client, chosen by the kernel)
     destination port 9090   (server)
-    sequence number  542236515   (relative 1)
-    ack number       3243736365   (relative 1)
-    data offset      8 x 4 = 32 bytes   (20 + options, e.g. timestamps)
+    sequence number  1907089755   (relative 1)
+    ack number       367389621   (relative 1)
+    data offset      8 x 4 = 32 bytes   (20 + 12 bytes of options)
+    reserved         0
     flags            0x18   (PSH+ACK)
-    window           64
+                     URG 0  ACK 1  PSH 1  RST 0  SYN 0  FIN 0
+    window           64   (x 2^10 from the SYN's window scale = 65536 bytes)
     checksum         0xfe30
+    urgent pointer   0
+    options          NOP, NOP, timestamps val 867220244 ecr 819812279
   payload (8 bytes)  "SYSINFO\n"
+
+--- Half close (connection 4): tcpdump -r logs/capture.pcap -n 'tcp port 57046' ---
+23:14:41.264608 IP 127.0.0.1.57046 > 127.0.0.1.9090: Flags [S], seq 1835455881, win 65495, options [mss 65495,sackOK,TS val 4026402761 ecr 0,nop,wscale 10], length 0
+23:14:41.264619 IP 127.0.0.1.9090 > 127.0.0.1.57046: Flags [S.], seq 2650399583, ack 1835455882, win 65483, options [mss 65495,sackOK,TS val 76088618 ecr 4026402761,nop,wscale 10], length 0
+23:14:41.264628 IP 127.0.0.1.57046 > 127.0.0.1.9090: Flags [.], ack 1, win 64, options [nop,nop,TS val 4026402761 ecr 76088618], length 0
+23:14:41.264718 IP 127.0.0.1.57046 > 127.0.0.1.9090: Flags [P.], seq 1:13, ack 1, win 64, options [nop,nop,TS val 4026402761 ecr 76088618], length 12
+23:14:41.264722 IP 127.0.0.1.9090 > 127.0.0.1.57046: Flags [.], ack 13, win 64, options [nop,nop,TS val 76088618 ecr 4026402761], length 0
+23:14:41.264728 IP 127.0.0.1.57046 > 127.0.0.1.9090: Flags [F.], seq 13, ack 1, win 64, options [nop,nop,TS val 4026402761 ecr 76088618], length 0
+23:14:41.265761 IP 127.0.0.1.9090 > 127.0.0.1.57046: Flags [P.], seq 1:110, ack 14, win 64, options [nop,nop,TS val 76088619 ecr 4026402761], length 109
+23:14:41.265783 IP 127.0.0.1.57046 > 127.0.0.1.9090: Flags [.], ack 110, win 64, options [nop,nop,TS val 4026402762 ecr 76088619], length 0
+23:14:41.466095 IP 127.0.0.1.9090 > 127.0.0.1.57046: Flags [P.], seq 110:219, ack 14, win 64, options [nop,nop,TS val 76088819 ecr 4026402762], length 109
+23:14:41.466128 IP 127.0.0.1.57046 > 127.0.0.1.9090: Flags [.], ack 219, win 64, options [nop,nop,TS val 4026402962 ecr 76088819], length 0
+23:14:41.666432 IP 127.0.0.1.9090 > 127.0.0.1.57046: Flags [P.], seq 219:328, ack 14, win 64, options [nop,nop,TS val 76089019 ecr 4026402962], length 109
+23:14:41.666466 IP 127.0.0.1.57046 > 127.0.0.1.9090: Flags [.], ack 328, win 64, options [nop,nop,TS val 4026403162 ecr 76089019], length 0
+23:14:41.666477 IP 127.0.0.1.9090 > 127.0.0.1.57046: Flags [F.], seq 328, ack 14, win 64, options [nop,nop,TS val 76089020 ecr 4026403162], length 0
+23:14:41.666483 IP 127.0.0.1.57046 > 127.0.0.1.9090: Flags [.], ack 329, win 64, options [nop,nop,TS val 4026403163 ecr 76089020], length 0
+client FIN: packet 6; first server reply: packet 7; replies after the client's FIN: 3
 
 ==============================================================================
  Checks
 ==============================================================================
-  [PASS] tcpdump captured packets on lo (34)
-  [PASS] the C pcap reader decoded every captured packet as IPv4/TCP (34)
-  [PASS] 3 connections (3 SYN packets): SYSINFO, WATCH, HELLO
+  [PASS] tcpdump captured packets on lo (48)
+  [PASS] the C pcap reader decoded every captured packet as IPv4/TCP (48)
+  [PASS] 4 connections (4 SYN packets): SYSINFO, WATCH, HELLO, half close
+  [PASS] 'tcp[13] & 2 == 2' keeps the 8 SYN and SYN+ACK packets the C reader counts
   [PASS] first connection opens with the three-way handshake SYN, SYN+ACK, ACK
   [PASS] the request payload is the 8 bytes "SYSINFO\n"
   [PASS] request: IPv4 header 20 bytes, protocol 6 (TCP), destination port 9090
   [PASS] the reply is one text line "OK seq=1 pid=... \n"
   [PASS] both sides send FIN to close the connection
-  [PASS] 4 "OK seq=" segments from the server (1 SYSINFO + 3 WATCH)
+  [PASS] 7 "OK seq=" segments from the server (1 SYSINFO + 3 WATCH + 3 half close)
   [PASS] "HELLO\n" is answered with "ERROR unknown request ..."
+  [PASS] half close: the client's FIN comes before the first reply, and all 3 replies still arrive
 
 --- Open the capture in Wireshark ---
   file          : logs/capture.pcap

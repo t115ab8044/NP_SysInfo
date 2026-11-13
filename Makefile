@@ -86,7 +86,7 @@ inspect: all
 	@ldd ./server ./client
 
 capture:
-	sudo tcpdump -i lo -n -x 'tcp port $(PORT)'
+	sudo tcpdump -i lo -l -vn -e -x 'tcp port $(PORT)'
 
 # Real Test: a Winsock client to run on Windows against the server in WSL2.
 win-client: win_client.exe
