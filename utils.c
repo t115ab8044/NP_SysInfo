@@ -7,7 +7,6 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -153,42 +152,14 @@ ssize_t write_all(int fd, const void *buf, size_t n)
     return (ssize_t)done;
 }
 
-static long long monotonic_ms(void)
+ssize_t read_line(int fd, char *buf, size_t cap)
 {
-    struct timespec ts;
-
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
-ssize_t read_line_timeout(int fd, char *buf, size_t cap, int timeout_ms)
-{
-    long long deadline = timeout_ms >= 0 ? monotonic_ms() + timeout_ms : 0;
     size_t len = 0;
 
     while (len < cap - 1) {
         char c;
-        ssize_t r;
+        ssize_t r = read(fd, &c, 1);
 
-        if (timeout_ms >= 0) {
-            /* [4] Wait only for the time left until the deadline, so a
-             * client sending one byte at a time cannot stretch it. */
-            struct pollfd pfd = { .fd = fd, .events = POLLIN };
-            long long left = deadline - monotonic_ms();
-            int ready = left > 0 ? poll(&pfd, 1, (int)left) : 0;
-
-            if (ready == 0) {
-                buf[len] = '\0';
-                return READ_TIMEOUT;
-            }
-            if (ready < 0) {
-                if (errno == EINTR)
-                    continue;
-                buf[len] = '\0';
-                return READ_ERR;
-            }
-        }
-        r = read(fd, &c, 1);
         if (r == 1) {
             if (c == '\n') {
                 if (len > 0 && buf[len - 1] == '\r')
@@ -207,11 +178,6 @@ ssize_t read_line_timeout(int fd, char *buf, size_t cap, int timeout_ms)
     }
     buf[len] = '\0';
     return READ_TOO_LONG;
-}
-
-ssize_t read_line(int fd, char *buf, size_t cap)
-{
-    return read_line_timeout(fd, buf, cap, -1);
 }
 
 /* ===== 3. System information ============================================ */

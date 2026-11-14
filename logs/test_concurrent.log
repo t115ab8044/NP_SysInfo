@@ -1,132 +1,109 @@
 
 ==== Environment ====
-date     : 2026-11-14 00:37:26
+date     : 2026-11-12 15:27:55
 kernel   : Linux 6.18.33.2-microsoft-standard-WSL2
 compiler : gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
-test     : 12 concurrent clients, each sends a different WATCH request (3 s each)
+test     : 12 concurrent clients, each asks for WATCH 6 500 (about 3 s)
 
 ==== Build (make) ====
 ./server:
-	libutils.so => /mnt/c/Users/USER/OneDrive/桌面/C語言期中實作/libutils.so (0x000073ebe7410000)
+	libutils.so => /mnt/c/Users/USER/OneDrive/桌面/C語言期中實作/libutils.so (0x00007366b0a89000)
 ./client:
-	libutils.so => /mnt/c/Users/USER/OneDrive/桌面/C語言期中實作/libutils.so (0x000075d0cdca6000)
+	libutils.so => /mnt/c/Users/USER/OneDrive/桌面/C語言期中實作/libutils.so (0x000079c4cc6d9000)
 
 ==== Start server ====
-$ ./server -p 9090   -> parent PID 18160 (log: logs/concurrent_server.log)
+$ ./server -p 9090   -> parent PID 504 (log: logs/concurrent_server.log)
 
 ==== Launch 12 clients at the same moment ====
-$ ./client -p 9090 -n 2 -w 3000  (client 01, background)
-$ ./client -p 9090 -n 3 -w 1500  (client 02, background)
-$ ./client -p 9090 -n 4 -w 1000  (client 03, background)
-$ ./client -p 9090 -n 5 -w 750   (client 04, background)
-$ ./client -p 9090 -n 6 -w 600   (client 05, background)
-$ ./client -p 9090 -n 7 -w 500   (client 06, background)
-$ ./client -p 9090 -n 9 -w 375   (client 07, background)
-$ ./client -p 9090 -n 11 -w 300  (client 08, background)
-$ ./client -p 9090 -n 13 -w 250  (client 09, background)
-$ ./client -p 9090 -n 16 -w 200  (client 10, background)
-$ ./client -p 9090 -n 21 -w 150  (client 11, background)
-$ ./client -p 9090 -n 31 -w 100  (client 12, background)
-client PIDs: 18161 18162 18163 18164 18165 18166 18167 18168 18169 18170 18171 18172
+$ ./client -p 9090 -n 6 -w 500   x 12 (background)
+client PIDs: 505 506 507 508 509 510 511 512 513 514 515 516
 
 ==== ps aux while all 12 clients are connected ====
 USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
-user       18160  0.0  0.0   2800  2172 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18161  0.0  0.0   2860  2228 pts/0    S+   00:37   0:00 ./client -p 9090 -n 2 -w 3000
-user       18162  0.0  0.0   2860  2232 pts/0    S+   00:37   0:00 ./client -p 9090 -n 3 -w 1500
-user       18163  0.0  0.0   2860  2244 pts/0    S+   00:37   0:00 ./client -p 9090 -n 4 -w 1000
-user       18164  0.0  0.0   2860  2204 pts/0    S+   00:37   0:00 ./client -p 9090 -n 5 -w 750
-user       18165  0.0  0.0   2860  2240 pts/0    S+   00:37   0:00 ./client -p 9090 -n 6 -w 600
-user       18166  0.0  0.0   2860  2216 pts/0    S+   00:37   0:00 ./client -p 9090 -n 7 -w 500
-user       18167  0.0  0.0   2860  2240 pts/0    S+   00:37   0:00 ./client -p 9090 -n 9 -w 375
-user       18168  0.0  0.0   2860  2176 pts/0    S+   00:37   0:00 ./client -p 9090 -n 11 -w 300
-user       18169  0.0  0.0   2860  2240 pts/0    S+   00:37   0:00 ./client -p 9090 -n 13 -w 250
-user       18170  0.0  0.0   2860  2208 pts/0    S+   00:37   0:00 ./client -p 9090 -n 16 -w 200
-user       18171  0.0  0.0   2860  2240 pts/0    S+   00:37   0:00 ./client -p 9090 -n 21 -w 150
-user       18172  0.0  0.0   2860  2240 pts/0    S+   00:37   0:00 ./client -p 9090 -n 31 -w 100
-user       18173  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18174  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18175  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18176  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18177  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18178  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18179  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18180  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18181  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18182  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18183  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
-user       18184  0.0  0.0   2800  1820 pts/0    S+   00:37   0:00 ./server -p 9090
+user         504  0.0  0.0   2804  2176 pts/0    S+   15:27   0:00 ./server -p 9090
+user         505  0.0  0.0   2864  2236 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         506  0.0  0.0   2864  2240 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         507  0.0  0.0   2864  2236 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         508  0.0  0.0   2864  2228 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         509  0.0  0.0   2864  2236 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         510  0.0  0.0   2864  2240 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         511  0.0  0.0   2864  2232 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         512  0.0  0.0   2864  2228 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         513  0.0  0.0   2864  2232 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         514  0.0  0.0   2864  2236 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         515  0.0  0.0   2864  2240 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         516  0.0  0.0   2864  2236 pts/0    S+   15:27   0:00 ./client -p 9090 -n 6 -w 500
+user         517  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         518  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         519  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         520  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         521  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         522  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         523  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         524  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         525  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         526  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         527  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
+user         528  0.0  0.0   2804  1724 pts/0    S+   15:27   0:00 ./server -p 9090
 
-==== Server process tree (every child's PPID = 18160) ====
+==== Server process tree (every child's PPID = 504) ====
     PID    PPID STAT     ELAPSED CMD
-  18160   18140 S+         00:01 ./server -p 9090
-  18173   18160 S+         00:01  \_ ./server -p 9090
-  18174   18160 S+         00:01  \_ ./server -p 9090
-  18175   18160 S+         00:01  \_ ./server -p 9090
-  18176   18160 S+         00:01  \_ ./server -p 9090
-  18177   18160 S+         00:01  \_ ./server -p 9090
-  18178   18160 S+         00:01  \_ ./server -p 9090
-  18179   18160 S+         00:01  \_ ./server -p 9090
-  18180   18160 S+         00:01  \_ ./server -p 9090
-  18181   18160 S+         00:01  \_ ./server -p 9090
-  18182   18160 S+         00:01  \_ ./server -p 9090
-  18183   18160 S+         00:01  \_ ./server -p 9090
-  18184   18160 S+         00:01  \_ ./server -p 9090
+    504     484 S+         00:01 ./server -p 9090
+    517     504 S+         00:01  \_ ./server -p 9090
+    518     504 S+         00:01  \_ ./server -p 9090
+    519     504 S+         00:01  \_ ./server -p 9090
+    520     504 S+         00:01  \_ ./server -p 9090
+    521     504 S+         00:01  \_ ./server -p 9090
+    522     504 S+         00:01  \_ ./server -p 9090
+    523     504 S+         00:01  \_ ./server -p 9090
+    524     504 S+         00:01  \_ ./server -p 9090
+    525     504 S+         00:01  \_ ./server -p 9090
+    526     504 S+         00:01  \_ ./server -p 9090
+    527     504 S+         00:01  \_ ./server -p 9090
+    528     504 S+         00:01  \_ ./server -p 9090
 server children alive           : 12
 established TCP conns on :9090  : 12
 
 ==== Client results (pid= is the server child that answered) ====
-[client 01] WATCH 2 3000  ->  2 snapshot(s), served by pid=18173
-[client 02] WATCH 3 1500  ->  3 snapshot(s), served by pid=18176
-[client 03] WATCH 4 1000  ->  4 snapshot(s), served by pid=18182
-[client 04] WATCH 5 750   ->  5 snapshot(s), served by pid=18179
-[client 05] WATCH 6 600   ->  6 snapshot(s), served by pid=18184
-[client 06] WATCH 7 500   ->  7 snapshot(s), served by pid=18180
-[client 07] WATCH 9 375   ->  9 snapshot(s), served by pid=18181
-[client 08] WATCH 11 300  -> 11 snapshot(s), served by pid=18175
-[client 09] WATCH 13 250  -> 13 snapshot(s), served by pid=18177
-[client 10] WATCH 16 200  -> 16 snapshot(s), served by pid=18174
-[client 11] WATCH 21 150  -> 21 snapshot(s), served by pid=18178
-[client 12] WATCH 31 100  -> 31 snapshot(s), served by pid=18183
+[client 01] 6 snapshot(s), served by pid=518
+[client 02] 6 snapshot(s), served by pid=523
+[client 03] 6 snapshot(s), served by pid=517
+[client 04] 6 snapshot(s), served by pid=522
+[client 05] 6 snapshot(s), served by pid=524
+[client 06] 6 snapshot(s), served by pid=519
+[client 07] 6 snapshot(s), served by pid=521
+[client 08] 6 snapshot(s), served by pid=525
+[client 09] 6 snapshot(s), served by pid=520
+[client 10] 6 snapshot(s), served by pid=526
+[client 11] 6 snapshot(s), served by pid=528
+[client 12] 6 snapshot(s), served by pid=527
 clients exited 0: 12 / 12, distinct server PIDs: 12 (full output: logs/concurrent_clients.log)
 
-==== Server log (accept, request and reap) ====
-00:37:26.220 [server:18160] INFO  accepted 127.0.0.1:35064 -> child pid 18173 (connection #1) | active=1
-00:37:26.220 [server:18173] INFO  127.0.0.1:35064: WATCH 2 3000 -> 2 snapshot(s)
-00:37:26.221 [server:18160] INFO  accepted 127.0.0.1:35054 -> child pid 18174 (connection #2) | active=2
-00:37:26.221 [server:18174] INFO  127.0.0.1:35054: WATCH 16 200 -> 16 snapshot(s)
-00:37:26.222 [server:18160] INFO  accepted 127.0.0.1:35058 -> child pid 18175 (connection #3) | active=3
-00:37:26.222 [server:18175] INFO  127.0.0.1:35058: WATCH 11 300 -> 11 snapshot(s)
-00:37:26.223 [server:18160] INFO  accepted 127.0.0.1:35056 -> child pid 18176 (connection #4) | active=4
-00:37:26.223 [server:18176] INFO  127.0.0.1:35056: WATCH 3 1500 -> 3 snapshot(s)
-00:37:26.224 [server:18160] INFO  accepted 127.0.0.1:35060 -> child pid 18177 (connection #5) | active=5
-00:37:26.224 [server:18177] INFO  127.0.0.1:35060: WATCH 13 250 -> 13 snapshot(s)
-00:37:26.225 [server:18160] INFO  accepted 127.0.0.1:35062 -> child pid 18178 (connection #6) | active=6
-00:37:26.225 [server:18178] INFO  127.0.0.1:35062: WATCH 21 150 -> 21 snapshot(s)
-00:37:26.226 [server:18160] INFO  accepted 127.0.0.1:35108 -> child pid 18179 (connection #7) | active=7
-00:37:26.226 [server:18179] INFO  127.0.0.1:35108: WATCH 5 750 -> 5 snapshot(s)
-00:37:26.227 [server:18160] INFO  accepted 127.0.0.1:35118 -> child pid 18180 (connection #8) | active=8
-00:37:26.227 [server:18180] INFO  127.0.0.1:35118: WATCH 7 500 -> 7 snapshot(s)
-00:37:26.227 [server:18160] INFO  accepted 127.0.0.1:35128 -> child pid 18181 (connection #9) | active=9
-00:37:26.227 [server:18181] INFO  127.0.0.1:35128: WATCH 9 375 -> 9 snapshot(s)
-00:37:26.228 [server:18160] INFO  accepted 127.0.0.1:35132 -> child pid 18182 (connection #10) | active=10
-00:37:26.228 [server:18182] INFO  127.0.0.1:35132: WATCH 4 1000 -> 4 snapshot(s)
-00:37:26.229 [server:18160] INFO  accepted 127.0.0.1:35146 -> child pid 18183 (connection #11) | active=11
-00:37:26.230 [server:18183] INFO  127.0.0.1:35146: WATCH 31 100 -> 31 snapshot(s)
-00:37:26.230 [server:18160] INFO  accepted 127.0.0.1:35160 -> child pid 18184 (connection #12) | active=12
-00:37:26.230 [server:18184] INFO  127.0.0.1:35160: WATCH 6 600 -> 6 snapshot(s)
-00:37:29.222 [server:18160] INFO  reaped child 18173: exit 0 (request served) | active=11
-00:37:29.225 [server:18160] INFO  reaped child 18176: exit 0 (request served) | active=10
-00:37:29.227 [server:18160] INFO  reaped child 18175: exit 0 (request served) | active=9
-00:37:29.228 [server:18160] INFO  reaped child 18174: exit 0 (request served) | active=8
-00:37:29.229 [server:18160] INFO  reaped child 18179: exit 0 (request served) | active=7
-00:37:29.230 [server:18160] INFO  reaped child 18177: exit 0 (request served) | active=6
-00:37:29.231 [server:18160] INFO  reaped child 18180: exit 0 (request served) | active=5
-00:37:29.231 [server:18160] INFO  reaped child 18182: exit 0 (request served) | active=4
-00:37:29.232 [server:18160] INFO  reaped child 18181: exit 0 (request served) | active=3
-00:37:29.233 [server:18160] INFO  reaped child 18184: exit 0 (request served) | active=2
-00:37:29.234 [server:18160] INFO  reaped child 18178: exit 0 (request served) | active=1
-00:37:29.242 [server:18160] INFO  reaped child 18183: exit 0 (request served) | active=0
+==== Server log (accept and reap) ====
+15:27:55.836 [server:504] INFO  accepted 127.0.0.1:52284 -> child pid 517 (connection #1) | active=1
+15:27:55.837 [server:504] INFO  accepted 127.0.0.1:52290 -> child pid 518 (connection #2) | active=2
+15:27:55.838 [server:504] INFO  accepted 127.0.0.1:52296 -> child pid 519 (connection #3) | active=3
+15:27:55.840 [server:504] INFO  accepted 127.0.0.1:52302 -> child pid 520 (connection #4) | active=4
+15:27:55.841 [server:504] INFO  accepted 127.0.0.1:52312 -> child pid 521 (connection #5) | active=5
+15:27:55.842 [server:504] INFO  accepted 127.0.0.1:52314 -> child pid 522 (connection #6) | active=6
+15:27:55.843 [server:504] INFO  accepted 127.0.0.1:52336 -> child pid 523 (connection #7) | active=7
+15:27:55.844 [server:504] INFO  accepted 127.0.0.1:52352 -> child pid 524 (connection #8) | active=8
+15:27:55.844 [server:504] INFO  accepted 127.0.0.1:52366 -> child pid 525 (connection #9) | active=9
+15:27:55.845 [server:504] INFO  accepted 127.0.0.1:52376 -> child pid 526 (connection #10) | active=10
+15:27:55.846 [server:504] INFO  accepted 127.0.0.1:52388 -> child pid 527 (connection #11) | active=11
+15:27:55.846 [server:504] INFO  accepted 127.0.0.1:52404 -> child pid 528 (connection #12) | active=12
+15:27:58.340 [server:504] INFO  reaped child 517: exit 0 (request served) | active=11
+15:27:58.343 [server:504] INFO  reaped child 518: exit 0 (request served) | active=10
+15:27:58.344 [server:504] INFO  reaped child 519: exit 0 (request served) | active=9
+15:27:58.345 [server:504] INFO  reaped child 520: exit 0 (request served) | active=8
+15:27:58.346 [server:504] INFO  reaped child 521: exit 0 (request served) | active=7
+15:27:58.347 [server:504] INFO  reaped child 522: exit 0 (request served) | active=6
+15:27:58.347 [server:504] INFO  reaped child 523: exit 0 (request served) | active=5
+15:27:58.348 [server:504] INFO  reaped child 524: exit 0 (request served) | active=4
+15:27:58.348 [server:504] INFO  reaped child 525: exit 0 (request served) | active=3
+15:27:58.349 [server:504] INFO  reaped child 526: exit 0 (request served) | active=2
+15:27:58.349 [server:504] INFO  reaped child 527: exit 0 (request served) | active=1
+15:27:58.350 [server:504] INFO  reaped child 528: exit 0 (request served) | active=0
 after the clients left: 0 child process(es), 0 zombie(s)
 
 ==== Stop server (SIGTERM) ====
@@ -137,7 +114,7 @@ server exit status: 143 (128 + SIGTERM)
   [PASS] ps aux shows 1 parent + 12 children = 13 ./server processes
   [PASS] 12 established TCP connections at the same time
   [PASS] server log reaches active=12
-  [PASS] all 12 clients got the number of snapshots they asked for and exited 0
+  [PASS] all 12 clients got 6 snapshots and exited 0
   [PASS] clients were answered by 12 distinct server PIDs
   [PASS] every answering PID is a child seen in the ps snapshot
   [PASS] no zombie or leftover children after the clients left

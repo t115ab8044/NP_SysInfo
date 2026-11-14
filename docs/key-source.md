@@ -1,24 +1,20 @@
-# Description of Key Source Code
+# 關鍵原始碼說明（Description of Key Source Code）
 
-[← Back to README](../README.md) · [System Design](system-design.md) · [Execution Screenshots](screenshots.md)
+[← 回到 README](../README.md) ・ [系統設計說明](system-design.md) ・ [執行截圖](screenshots.md) ・ [稽核討論](audit.md)
 
-All the snippets below come from the source code in this repo; `/* ... */` marks parts left out because they do not matter for the point being made. Follow the **Location** links to see the full code.
+以下片段都來自本 repo 的原始碼，`/* ... */` 表示省略與重點無關的部分。點擊「位置」的連結可以看到完整程式。
 
-## 1. Parent main loop: it only accepts connections and forks
+## 1. Parent 主迴圈：只負責接連線與 fork
 
-**Location:** [`main()` in `server.c`](../server.c#L634-L677)
+**位置：** [`server.c` 的 `main()`](../server.c#L458-L496)
 
 ```c
 for (;;) {
     /* ... */
     report_reaped_children();
-    if (g_interrupts)
-        break;                  /* [5b] Ctrl+C: stop accepting */
     cfd = accept(lfd, (struct sockaddr *)&addr, &addr_len);
     if (cfd < 0) {
-        /* EINTR: a signal arrived (SIGCHLD to log, or Ctrl+C).
-         * EBADF: Ctrl+C has closed the listening socket. */
-        if (errno != EINTR && !g_interrupts)
+        if (errno != EINTR)     /* EINTR: a SIGCHLD arrived, log it */
             LOG_ERROR("accept: %s", strerror(errno));
         continue;
     }
@@ -39,18 +35,16 @@ for (;;) {
     LOG_INFO("accepted %s -> child pid %d (connection #%d) | active=%d", /* ... */);
     close(cfd);                 /* the child owns the connection now */
 }
-return shut_down();
 ```
 
-- Each connection gets its own `fork()`ed child; the project uses no threads anywhere.
-- After `fork()` both sides hold the connection's fd: the parent must `close(cfd)`, and the child closes the listening socket.
-- `set_signal()` does not set `SA_RESTART`, so SIGCHLD makes `accept()` return `EINTR`. The parent goes back to the top of the loop and first writes the children it just reaped to the log.
-- When the connection limit (`-m`, default 32) is reached, the connection is rejected directly, without a fork (Section 8).
-- After `Ctrl+C` the loop ends, and `shut_down()` waits for the children to finish (mechanism [5b], Section 7).
+- 每條連線都 `fork()` 一個 child，整個專案沒有使用 thread。
+- `fork()` 之後兩邊都持有連線的 fd：parent 要 `close(cfd)`，child 則關閉 listening socket。
+- `set_signal()` 沒有設 `SA_RESTART`，所以 SIGCHLD 會讓 `accept()` 回傳 `EINTR`。parent 回到迴圈開頭，先把剛回收的 child 寫進 log。
+- 達到連線上限時直接拒絕，不會 fork（機制 [4]）。
 
-## 2. SIGCHLD handler: reaping children (mechanism [1])
+## 2. SIGCHLD handler：回收 child（機制 [1]）
 
-**Location:** [`on_sigchld()` in `server.c`](../server.c#L112-L129); the log is written by [`log_reaped()` and `report_reaped_children()`](../server.c#L143-L162)
+**位置：** [`server.c` 的 `on_sigchld()`](../server.c#L78-L93)，輸出 log 的 [`report_reaped_children()`](../server.c#L106-L122)
 
 ```c
 static void on_sigchld(int sig)
@@ -66,43 +60,33 @@ static void on_sigchld(int sig)
         g_reap_pid[h % REAP_RING] = pid;
         g_reap_status[h % REAP_RING] = status;
         g_reap_head = h + 1;
-        if (!g_cfg.reap_loop)
-            break;                  /* --reap-once: the mistake being shown */
     }
     errno = saved_errno;
 }
 ```
 
-- Signals do not queue: if another child exits before SIGCHLD is handled, it only sets the same pending bit again. One SIGCHLD can stand for several children, so `waitpid` has to be a loop that keeps reaping until none are left.
-- With `--reap-once` the loop `break`s after reaping one child, which is the common mistake of "one `waitpid` call per signal". When 12 children exit at once, only 2 are reaped, the rest become `<defunct>`, and `g_active` stays at 10.
-- `WNOHANG` keeps the handler from blocking.
-- `printf()` cannot be called in a signal handler, so the handler only stores the PID and status in a ring buffer; the main loop decodes them with `WIFEXITED`/`WIFSIGNALED` and writes the log.
-- The handler can interrupt any code, so it saves and restores `errno`.
+- signal 不會排隊，一個 SIGCHLD 可能代表好幾個 child 結束，所以 `waitpid` 要寫成迴圈，一直收到沒有為止。
+- `WNOHANG` 讓 handler 不會卡住。
+- `printf()` 不能在 signal handler 裡呼叫，所以 handler 只把 PID 和 status 存進 ring buffer，由主迴圈用 `WIFEXITED`／`WIFSIGNALED` 解讀後寫 log。
+- handler 可能打斷任何程式，所以要保存並還原 `errno`。
+- `--no-sigchld` 時不註冊 handler，結束的 child 全部變成 `<defunct>`。
 
-## 3. Child setup (mechanisms [5a], [5b], [2b])
+## 3. Child 初始化：跟著 parent 結束（機制 [5]）
 
-**Location:** [`run_child()` in `server.c`](../server.c#L378-L410)
+**位置：** [`server.c` 的 `run_child()`](../server.c#L287-L304)
 
 ```c
 static void run_child(int lfd, int cfd, const char *peer, pid_t parent)
 {
     int rc;
 
-    if (g_cfg.pdeathsig) {                       /* [5a] */
+    if (g_cfg.pdeathsig) {
         prctl(PR_SET_PDEATHSIG, SIGTERM);
         if (getppid() != parent)    /* the parent died before prctl() */
             _exit(CHILD_IO_ERROR);
     }
-    if (g_cfg.graceful)                          /* [5b] */
-        set_signal(SIGINT, SIG_IGN);
     close(lfd);                     /* only the parent accepts */
     set_signal(SIGCHLD, SIG_DFL);   /* the child has no children to reap */
-    if (g_cfg.user_timeout) {                    /* [2b] */
-        unsigned int ms = USER_TIMEOUT_MS;
-
-        if (setsockopt(cfd, IPPROTO_TCP, TCP_USER_TIMEOUT, &ms, sizeof(ms)) < 0)
-            LOG_WARN("%s: TCP_USER_TIMEOUT not set: %s", peer, strerror(errno));
-    }
     rc = serve_client(cfd, peer);
     close(cfd);
     /* ... */
@@ -110,14 +94,13 @@ static void run_child(int lfd, int cfd, const char *peer, pid_t parent)
 }
 ```
 
-- **[5a]** When the parent gets `kill -9` it cannot tell anyone, so the kernel takes over: `PR_SET_PDEATHSIG` makes the child receive `SIGTERM` as soon as the parent dies. After setting it, the child checks `getppid()`: if the parent died between `fork()` and `prctl()`, the child has already been re-parented and the setting will never fire, so the child must exit on its own.
-- **[5b]** The SIGINT from `Ctrl+C` goes to the whole foreground process group, so the child receives it too. The child ignores it and lets the parent decide when to stop serving. `fork()` copies the parent's handler, which is meant for the parent, so the child sets SIGINT explicitly here.
-- **[2b]** `TCP_USER_TIMEOUT` is 3000 ms: when sent data has gone more than 3 seconds without an ACK, the kernel gives up the connection.
-- The exit code passed to `_exit(rc)` gives the reason the child ended, and the parent writes it to the log when it reaps the child.
+- parent 被 `kill -9` 時無法通知任何人，所以改由 kernel 負責：`PR_SET_PDEATHSIG` 讓 parent 一死，child 就收到 `SIGTERM`。
+- 設定之後再檢查 `getppid()`：parent 如果在 `fork()` 和 `prctl()` 之間就死了，child 已經被過繼，設定不會生效，要自己結束。
+- `_exit(rc)` 的 exit code 代表結束原因，parent 回收時會寫進 log。
 
-## 4. Write failures: EPIPE and ETIMEDOUT (mechanisms [2a], [2b])
+## 4. 忽略 SIGPIPE，處理 EPIPE（機制 [2]）
 
-**Location:** [`main()` in `server.c`](../server.c#L609-L611), [`send_snapshots()`](../server.c#L290-L327)
+**位置：** [`server.c` 的 `main()`](../server.c#L436-L440)，[`send_snapshots()`](../server.c#L222-L251)
 
 ```c
 /* main(): children inherit this through fork() */
@@ -135,11 +118,6 @@ for (int seq = 1; seq <= count; seq++) {
                      peer, seq, count, strerror(errno));
             return CHILD_PEER_GONE;
         }
-        if (errno == ETIMEDOUT) {
-            LOG_WARN("%s: client unreachable, no ACK for %d ms (%s) -> stop before "
-                     "snapshot %d/%d", peer, USER_TIMEOUT_MS, strerror(errno), seq, count);
-            return CHILD_PEER_GONE;
-        }
         /* ... */
     }
     if (seq < count)
@@ -147,37 +125,23 @@ for (int seq = 1; seq <= count; seq++) {
 }
 ```
 
-- **[2a]** By default, a `write()` to a closed connection gets SIGPIPE, which kills the process. Once SIGPIPE is ignored, `write()` returns -1 with errno set to `EPIPE` instead. Signal dispositions are inherited through `fork()`, so setting it once in the parent is enough. After the client disconnects, the first write only makes the other side answer with an RST; the second write is the one that gets `EPIPE`. `WATCH` writes at regular intervals, so it reproduces this reliably.
-- **[2b]** If the client's network suddenly vanishes, nothing at all comes back from the other side: no RST and no FIN. `write()` only puts the data into the send buffer, so it keeps succeeding. With `TCP_USER_TIMEOUT` set, the kernel gives up the connection and the next `write()` returns `ETIMEDOUT`.
+- 對已經關閉的連線 `write()`，預設會收到 SIGPIPE 直接被殺掉。忽略之後，`write()` 改成回傳 -1、errno 為 `EPIPE`。
+- signal 的處理方式會透過 `fork()` 繼承，所以只要在 parent 設定一次。
+- client 斷線後，第一次寫入只會讓對方回 RST，第二次寫入才收到 `EPIPE`。`WATCH` 每隔一段時間寫一次，正好能穩定重現。
 
-## 5. Request length limit and request deadline (mechanisms [3], [4])
+## 5. 請求長度上限（機制 [3]）
 
-**Location:** [`read_line_timeout()` in `utils.c`](../utils.c#L164-L210), its caller [`read_request()`](../server.c#L250-L287), and the control version [`read_line_unlimited()`](../server.c#L182-L247)
+**位置：** [`utils.c` 的 `read_line()`](../utils.c#L155-L181)，對照組 [`read_line_unlimited()`](../server.c#L140-L187)
 
 ```c
-ssize_t read_line_timeout(int fd, char *buf, size_t cap, int timeout_ms)
+ssize_t read_line(int fd, char *buf, size_t cap)
 {
-    long long deadline = timeout_ms >= 0 ? monotonic_ms() + timeout_ms : 0;
     size_t len = 0;
 
     while (len < cap - 1) {
         char c;
-        ssize_t r;
+        ssize_t r = read(fd, &c, 1);
 
-        if (timeout_ms >= 0) {
-            /* [4] Wait only for the time left until the deadline, so a
-             * client sending one byte at a time cannot stretch it. */
-            struct pollfd pfd = { .fd = fd, .events = POLLIN };
-            long long left = deadline - monotonic_ms();
-            int ready = left > 0 ? poll(&pfd, 1, (int)left) : 0;
-
-            if (ready == 0) {
-                buf[len] = '\0';
-                return READ_TIMEOUT;
-            }
-            /* ... */
-        }
-        r = read(fd, &c, 1);
         if (r == 1) {
             if (c == '\n') {
                 if (len > 0 && buf[len - 1] == '\r')
@@ -199,87 +163,13 @@ ssize_t read_line_timeout(int fd, char *buf, size_t cap, int timeout_ms)
 }
 ```
 
-- **[3]** The buffer has a fixed size (`MAX_LINE` 128). If 127 bytes have been read without a `\n`, the function returns `READ_TOO_LONG`, and the server replies `ERROR request too long` and exits. The control version `read_line_unlimited()` doubles its buffer each time until it sees a `\n`; the 16 MiB request with no newline makes it grow to 32 MiB.
-- **[4]** The deadline is for "the whole line", not for "each read": the cut-off time is computed when reading starts, and after that each byte waits only for the time that is left. Slowloris sends 1 byte every 0.5 seconds, so each `poll` gets data quickly, but once the 3 seconds are up the function returns `READ_TIMEOUT`, and the server replies `ERROR request timeout` and exits with code 4.
-- It reads 1 byte at a time, so the data after `\n` stays in the socket and is not read by mistake.
-- `read_line()` is just `read_line_timeout(..., -1)`; the client uses it, with no deadline, to read replies.
+- 緩衝區大小固定（`MAX_LINE` 128），讀滿 127 bytes 還沒看到 `\n` 就回傳 `READ_TOO_LONG`，server 回 `ERROR request too long` 後結束。
+- 一次讀 1 byte，`\n` 之後的資料留在 socket 裡，不會被多讀走。
+- 對照組 `read_line_unlimited()` 每次把緩衝區加倍，直到看到 `\n`。16 MiB 不換行的請求讓它長到 32 MiB。
 
-## 6. Parsing the request (mechanism [3])
+## 6. 連線上限：parent 直接拒絕（機制 [4]）
 
-**Location:** [`serve_client()` in `server.c`](../server.c#L336-L376)
-
-```c
-if (strcmp(line, "SYSINFO") == 0) {
-    count = 1;
-    interval_ms = 0;
-} else if (g_cfg.validate) {
-    int fields = sscanf(line, "%15s %3d %5d %1s", cmd, &count, &interval_ms, extra);
-
-    if (fields < 1 || strcmp(cmd, "WATCH") != 0)
-        return reject_unknown(cfd, peer, line);
-    if (fields != 3 || count < 1 || count > WATCH_MAX_COUNT ||
-        interval_ms < WATCH_MIN_MS || interval_ms > WATCH_MAX_MS) {
-        LOG_WARN("%s: bad WATCH arguments \"%s\" -> rejected", peer, line);
-        send_error(cfd, "bad arguments: WATCH <count 1-100> <ms 100-10000>");
-        return CHILD_BAD_REQUEST;
-    }
-} else {
-    /* --no-validate: plain %d, no width and no range checks */
-    if (sscanf(line, "%15s %d %d", cmd, &count, &interval_ms) != 3 ||
-        strcmp(cmd, "WATCH") != 0)
-        return reject_unknown(cfd, peer, line);
-}
-```
-
-- `%15s` limits the length of the command, so it cannot write past the end of `cmd`.
-- `%3d` and `%5d` read at most 3 and 5 digits, exactly enough for the limits 100 and 10000. Without the widths, `WATCH 4294967297 100` overflows the `int`; glibc keeps only the low 32 bits, so it becomes `WATCH 1 100` and is accepted (a problem found during testing).
-- One extra `%1s` is read: if anything is left after the numbers, `fields` is 4 and the request is rejected. When a number is longer than its width, `%1s` also reads the remaining digits, so that request is rejected too.
-- `count` and `interval_ms` both have lower and upper limits: `WATCH 100 0` (100 lines pouring out at once) and `WATCH 100000 1000` (holding a child for 27.8 hours) are both rejected.
-- `--no-validate` keeps the version with no width and no range checks, as the Without control.
-
-## 7. Graceful shutdown on Ctrl+C (mechanism [5b])
-
-**Location:** [`on_sigint()` in `server.c`](../server.c#L436-L443), [`shut_down()`](../server.c#L457-L485)
-
-```c
-static void on_sigint(int sig)
-{
-    (void)sig;
-    if (g_interrupts++ == 0 && g_listen_fd >= 0) {
-        close(g_listen_fd);
-        g_listen_fd = -1;
-    }
-}
-```
-
-```c
-static int shut_down(void)
-{
-    /* ... */
-    set_signal(SIGCHLD, SIG_DFL);   /* the waitpid() below reaps from now on */
-    report_reaped_children();
-    /* ... */
-    set_signal(SIGALRM, on_sigalrm);
-    alarm(SHUTDOWN_GRACE_SEC);
-    for (;;) {
-        pid = waitpid(-1, &status, 0);
-        if (pid > 0)
-            log_reaped(pid, status);
-        else if (errno != EINTR || g_interrupts > 1 || g_grace_over)
-            break;
-    }
-    all_done = errno == ECHILD;
-    /* ... */
-}
-```
-
-- On the first `Ctrl+C`, the handler calls `close()` on the listening socket. `close()` is async-signal-safe; even if the signal lands just after the main loop checks `g_interrupts` and before it calls `accept()`, `accept()` fails at once because the fd is already closed, so it cannot block. New clients get connection refused immediately.
-- The parent then waits with a blocking `waitpid()` for the children to end one by one; `ECHILD` means they have all finished, and the parent exits with code 0.
-- The parent is still alive while it waits, so [5a]'s pdeathsig does not fire. After more than 30 seconds (`alarm`), or on a second `Ctrl+C` (`g_interrupts > 1`), `waitpid()` is interrupted and the parent exits at once; pdeathsig takes care of the remaining children.
-
-## 8. Connection limit: the parent rejects directly
-
-**Location:** [`reject_busy()` in `server.c`](../server.c#L419-L427)
+**位置：** [`server.c` 的 `reject_busy()`](../server.c#L313-L321)
 
 ```c
 static void reject_busy(int cfd, const char *peer)
@@ -293,13 +183,41 @@ static void reject_busy(int cfd, const char *peer)
 }
 ```
 
-- `g_active` is the number of children not yet reaped: it goes up by 1 after a fork and down by 1 when a child is reaped. The reap records are processed once before the check, so the number is not too high.
-- This is the only place where the parent writes to a client, so it is extra careful: `MSG_DONTWAIT` keeps it from blocking, and `MSG_NOSIGNAL` keeps SIGPIPE from killing it.
-- The limit can only cap the number of children; it cannot stop Slowloris, because 32 slow clients can still fill every slot. That is why [4]'s request deadline is also needed.
+- `g_active` 是還沒回收的 child 數量：fork 後加 1，回收時減 1。檢查前會先處理一次回收紀錄，避免數字偏高。
+- 這是 parent 唯一會寫 client 的地方，所以特別小心：`MSG_DONTWAIT` 讓它不會卡住，`MSG_NOSIGNAL` 讓它不會被 SIGPIPE 殺掉。
+- 被拒絕的連線不會產生 child。
 
-## 9. `write_all`: writing all the data
+## 7. 解析請求
 
-**Location:** [`write_all()` in `utils.c`](../utils.c#L135-L154)
+**位置：** [`server.c` 的 `serve_client()`](../server.c#L253-L285)
+
+```c
+fields = sscanf(line, "%15s %3d %5d %1s", cmd, &count, &interval_ms, extra);
+if (strcmp(line, "SYSINFO") == 0) {
+    count = 1;
+    interval_ms = 0;
+} else if (fields >= 1 && strcmp(cmd, "WATCH") == 0) {
+    if (fields != 3 || count < 1 || count > WATCH_MAX_COUNT ||
+        interval_ms < WATCH_MIN_MS || interval_ms > WATCH_MAX_MS) {
+        LOG_WARN("%s: bad WATCH arguments \"%s\" -> rejected", peer, line);
+        send_error(cfd, "bad arguments: WATCH <count 1-100> <ms 100-10000>");
+        return CHILD_BAD_REQUEST;
+    }
+} else {
+    LOG_WARN("%s: unknown request \"%.40s\" -> rejected", peer, line);
+    send_error(cfd, "unknown request: use SYSINFO or WATCH <count> <ms>");
+    return CHILD_BAD_REQUEST;
+}
+```
+
+- `%15s` 限制指令長度，避免寫出 `cmd` 的範圍。
+- `%3d`、`%5d` 限制數字最多讀 3 位和 5 位，剛好容納上限 100 和 10000。沒有寬度時，`WATCH 4294967297 100` 會讓 `int` 溢位，變成 `WATCH 1 100` 被接受（稽核時發現，見 [稽核討論](audit.md)）。
+- 多讀一個 `%1s`：如果後面還有多餘的字，`fields` 會是 4，請求就被拒絕。數字超過寬度時，剩下的位數也會被 `%1s` 讀到，一樣被拒絕。
+- `count` 和 `interval_ms` 都有上下限，client 無法要求無限次或過於密集的回報。
+
+## 8. `write_all`：寫完全部資料
+
+**位置：** [`utils.c` 的 `write_all()`](../utils.c#L134-L153)
 
 ```c
 ssize_t write_all(int fd, const void *buf, size_t n)
@@ -323,13 +241,13 @@ ssize_t write_all(int fd, const void *buf, size_t n)
 }
 ```
 
-- One `write()` may not write everything (a short write), so the function keeps writing until all n bytes are written.
-- It retries when a signal interrupts it (`EINTR`); for any other error it returns -1 and keeps `errno`, so the caller can tell `EPIPE` from `ETIMEDOUT`.
-- The server and the client both use this function through `libutils.so`.
+- 一次 `write()` 不一定寫得完（short write），要寫到滿 n bytes 為止。
+- 被 signal 中斷（`EINTR`）時重試；其他錯誤回傳 -1 並保留 `errno`，讓呼叫者判斷是不是 `EPIPE`。
+- server 和 client 都透過 `libutils.so` 使用這個函式。
 
-## 10. Two-level debug macros
+## 9. 雙層 Debug 巨集
 
-**Location:** [`utils.h`](../utils.h#L62-L79)
+**位置：** [`utils.h`](../utils.h#L60-L77)
 
 ```c
 #ifdef ENABLE_DEBUG
@@ -352,7 +270,7 @@ ssize_t write_all(int fd, const void *buf, size_t n)
 #endif
 ```
 
-- Compile time: without `-DENABLE_DEBUG` the macros expand to `((void)0)`, so neither the code nor the strings get into the executable. The measurements show no logger calls at all inside the release build's `write_all()`.
-- Runtime: `-d 0/1/2` sets `g_runtime_debug_level`; 1 prints the flow, and 2 also prints hex dumps.
-- `__FILE__` and `__LINE__` let every debug line be traced back to its place in the source.
-- `do { ... } while (0)` lets the macro be used safely inside `if` / `else` too.
+- 編譯期：沒有 `-DENABLE_DEBUG` 時巨集展開成 `((void)0)`，程式碼和字串都不會進入執行檔。實測 release 版的 `write_all()` 裡沒有任何 logger 呼叫。
+- 執行期：`-d 0/1/2` 設定 `g_runtime_debug_level`，1 印流程，2 再印 hex dump。
+- `__FILE__` 和 `__LINE__` 讓每一行 debug 訊息都能對應到原始碼位置。
+- `do { ... } while (0)` 讓巨集在 `if` / `else` 裡也能安全使用。

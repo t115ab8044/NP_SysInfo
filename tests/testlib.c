@@ -30,12 +30,6 @@ int tl_port;
 char tl_port_str[16];
 pid_t tl_server_pid;
 
-const struct tl_watch tl_watches[TL_NWATCH] = {
-    { "2",  "3000" }, { "3",  "1500" }, { "4",  "1000" }, { "5",  "750" },
-    { "6",  "600"  }, { "7",  "500"  }, { "9",  "375"  }, { "11", "300" },
-    { "13", "250"  }, { "16", "200"  }, { "21", "150"  }, { "31", "100" },
-};
-
 static pid_t g_tee_pid;
 
 void tl_die(const char *fmt, ...)

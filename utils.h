@@ -6,9 +6,7 @@
  *                  (g_runtime_debug_level, set with -d).
  *   2. Socket I/O  write_all() and read_line() cope with short reads and
  *                  writes and with EINTR; read_line() also caps the line
- *                  length (robustness mechanism [3]), and
- *                  read_line_timeout() adds a deadline for the whole line
- *                  (mechanism [4]).
+ *                  length (robustness mechanism [3]).
  *   3. Sysinfo     collect a snapshot of this host and format it as a line.
  *   4. Misc        integer parsing, EINTR-safe sleep, sigaction() wrapper.
  *
@@ -82,19 +80,17 @@ void log_hexdump(const char *label, const void *data, size_t len);
 
 /*
  * Write all n bytes, retrying after EINTR and short writes.
- * Returns n, or -1 with errno set (EPIPE or ECONNRESET: the peer is gone;
- * ETIMEDOUT: the peer stopped acknowledging, mechanism [2b]).
+ * Returns n, or -1 with errno set (EPIPE or ECONNRESET: the peer is gone).
  * Unless the process ignores SIGPIPE,
  * writing to a peer that has gone kills the process instead of returning
- * EPIPE (robustness mechanism [2a]).
+ * EPIPE (robustness mechanism [2]).
  */
 ssize_t write_all(int fd, const void *buf, size_t n);
 
 enum {
     READ_EOF      = -1,     /* peer closed before a whole line arrived */
     READ_ERR      = -2,     /* read() failed; errno tells why */
-    READ_TOO_LONG = -3,     /* cap - 1 bytes and still no '\n' */
-    READ_TIMEOUT  = -4      /* the deadline passed before the '\n' */
+    READ_TOO_LONG = -3      /* cap - 1 bytes and still no '\n' */
 };
 
 /*
@@ -105,14 +101,6 @@ enum {
  */
 ssize_t read_line(int fd, char *buf, size_t cap);
 
-/*
- * read_line() with one deadline for the whole line (mechanism [4]): the
- * '\n' must arrive within timeout_ms of the call, however the bytes trickle
- * in. timeout_ms < 0 waits for ever. On READ_TIMEOUT, buf holds the bytes
- * received so far.
- */
-ssize_t read_line_timeout(int fd, char *buf, size_t cap, int timeout_ms);
-
 /* ===== 3. System information ============================================ */
 
 struct host_info {
@@ -121,7 +109,7 @@ struct host_info {
     double load[3];                 /* 1, 5 and 15 minute load average */
     unsigned long long mem_total_kb;
     unsigned long long mem_avail_kb;
-    unsigned procs;                 /* tasks, threads included (sysinfo(2)) */
+    unsigned procs;                 /* number of processes */
 };
 
 /* Fill *out from gethostname(), sysinfo(2), getloadavg() and /proc/meminfo. */

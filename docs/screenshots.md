@@ -1,175 +1,167 @@
-# Execution Screenshots
+# 執行截圖（Execution Screenshots）
 
-[← Back to README](../README.md) · [System Design](system-design.md) · [Key Source Code](key-source.md)
+[← 回到 README](../README.md) ・ [系統設計說明](system-design.md) ・ [關鍵原始碼說明](key-source.md) ・ [稽核討論](audit.md)
 
-Except for the Wireshark window in Section 13 (the capture file opened on Windows), every screenshot was taken from a real run on WSL2 Ubuntu. Above each image is the command that produced it; run it in the project folder to reproduce it. Screenshot 3 starts a server on port 9090, so make sure no other server is running before you run it.
+除了第 13～15 節的 Wireshark 和 Windows PowerShell 畫面，其他都是在 WSL2 Ubuntu 上實際執行的畫面。每張圖上方是產生該畫面的指令，在專案資料夾執行即可重現。截圖 3、5、14 都會在 9090 埠啟動 server，執行前要先確定沒有其他 server 在跑。
 
-## 1. Build and the shared library
+## 1. 建置與動態函式庫
 
 ```bash
 make clean && make && ldd ./server ./client | grep -E '^\./|libutils'
 ```
 
-`libutils.so` is compiled with `-fPIC -shared`, and `ldd` shows that the server and the client both link to it dynamically.
+`libutils.so` 以 `-fPIC -shared` 編譯，`ldd` 顯示 server 和 client 都動態連結到它。
 
-![Build and ldd output](screenshots/01_build_so.png)
+![建置與 ldd 結果](screenshots/01_build_so.png)
 
-## 2. 12 concurrent clients (fork-based multi-process)
+## 2. 12 個 client 併發（fork 多程序）
 
 ```bash
 make demo
 ```
 
-The 12 clients each send a different request, from `WATCH 2 3000` to `WATCH 31 100`, and every connection lasts 3 seconds. 12 children exist at the same time (all with the parent as their PPID), the 12 clients are served by 12 different PIDs, and each receives the number of snapshots it asked for; the bad requests get `ERROR`, and no zombie processes are left at the end.
+12 個 child 同時存在（PPID 都是 parent），12 個 client 由 12 個不同的 PID 服務，錯誤的請求收到 `ERROR`，結束後沒有殭屍程序。
 
-![make demo output](screenshots/02_concurrent_demo.png)
+![make demo 結果](screenshots/02_concurrent_demo.png)
 
-## 3. Two-level debug: runtime
+## 3. 雙層 Debug：執行期
 
 ```bash
 ./server -d 2 & sleep 0.3; ./client; sleep 0.2; kill $!
 ```
 
-`-d 2` shows `file:line` and hex dumps; the request starts with `53 59 53 49 4e 46 4f` (`SYSINFO`).
+`-d 2` 會顯示 `file:line` 和 hex dump，請求開頭是 `53 59 53 49 4e 46 4f`（`SYSINFO`）。
 
-![Runtime debug level 2](screenshots/03_debug_runtime.png)
+![執行期 Debug 等級 2](screenshots/03_debug_runtime.png)
 
-## 4. Two-level debug: compile time
+## 4. 雙層 Debug：編譯期
 
 ```bash
 tail -n 24 logs/test_debug.log
 ```
 
-The release build has 0 debug strings and no logger calls inside `write_all()`; the number of output lines grows with the `-d` level.
+release 版的 debug 字串為 0 個，`write_all()` 內也沒有 logger 呼叫；輸出行數隨 `-d` 等級增加。
 
-![Compile-time debug checks](screenshots/04_debug_compile.png)
+![編譯期 Debug 驗證結果](screenshots/04_debug_compile.png)
 
-## 5. With/Without [1]: 12 clients disconnect at once
-
-```bash
-sed -n '/^==== \[1\]/,/\[1\] with the loop/p' logs/test_robustness.log
-```
-
-12 `--mode idle` clients connect and are then killed together with `kill -9`, so 12 children exit almost at the same moment. Signals do not queue, so the parent receives SIGCHLD only a few times. Without (`--reap-once`, one `waitpid` call per SIGCHLD) reaps only 2; the other 10 stay in state `Z` and the parent's count stays at `active=10`. With reaps them all in one loop, all 12.
-
-![With/Without comparison of the waitpid loop](screenshots/05_reap_once.png)
-
-## 6. With/Without [2]: the client leaves midway
-
-### 6.1 [2a] The client closes normally (SIGPIPE)
+## 5. With/Without [1]：殭屍程序
 
 ```bash
-sed -n '/^==== \[2a\]/,/\[2a\] both/p' logs/test_robustness.log
+./server --no-sigchld 2>/dev/null & sleep 0.3; for i in 1 2 3; do ./client >/dev/null 2>&1; done; sleep 0.3; ps -o pid,ppid,stat,cmd --ppid $!; kill $!
 ```
-
-Without, signal 13 kills the child; With, the child detects `EPIPE` and exits normally with code 3. In both cases the parent keeps serving.
-
-![With/Without comparison of SIGPIPE](screenshots/06_sigpipe.png)
-
-### 6.2 [2b] The client's network suddenly vanishes (TCP_USER_TIMEOUT)
 
 ```bash
-sed -n '/^==== \[2b\]/,/\[2b\] with:/p' logs/test_robustness.log
+./server 2>/dev/null & sleep 0.3; for i in 1 2 3; do ./client >/dev/null 2>&1; done; sleep 0.3; ps -o pid,ppid,stat,cmd --ppid $!; kill $!
 ```
 
-After the client receives 2 snapshots, `tc qdisc add dev lo root netem loss 100%` drops every packet on the loopback, and the client vanishes with it. Without, every `write()` succeeds, the child "sends" for another 9 seconds and finally logs `exit 0 (request served)`; With, `write()` returns `ETIMEDOUT` 4.0 seconds after the cut, and the child logs `client unreachable` and stops. The test runs `tc` inside its own network namespace, so it needs no root and does not affect the system's network.
+Without 留下 3 個 `Z` 狀態的 `<defunct>`，With 沒有任何殘留的 child。
 
-![With/Without comparison of TCP_USER_TIMEOUT](screenshots/06_net_vanish.png)
+![殭屍程序的 With/Without 對比](screenshots/05_zombie.png)
 
-## 7. With/Without [3]: four malicious requests
+## 6. With/Without [2]：client 中途離開（SIGPIPE）
 
 ```bash
-sed -n '/^==== \[3\]/,/\[3\] with:/p' logs/test_robustness.log
+sed -n '/^==== \[2\]/,/both: the next client/p' logs/test_robustness.log
 ```
 
-The same server receives 4 requests in turn: (a) 16 MiB with no newline, (b) `WATCH 4294967297 100`, (c) `WATCH 100 0`, (d) `WATCH 100000 1000`. Without, all 4 are accepted: (a) the buffer doubles up to 32 MiB and the child's RSS is about 17 MiB; (b) 4294967297 overflows to 1, and the log records `-> 1 snapshot(s)`; (c) 100 lines go out within 22 ms; (d) this request would run for 27.8 hours. With, all 4 get `ERROR`.
+Without 時 child 被 signal 13 殺掉，With 時 child 偵測 `EPIPE` 後以 exit 3 正常結束；兩種情況下 parent 都能繼續服務。
 
-The buffer is allocated at 32 MiB, but only 16 MiB of it is actually written; Linux gives no physical memory to the part that was never written, so the RSS is about 17 MiB.
+![SIGPIPE 的 With/Without 對比](screenshots/06_sigpipe.png)
 
-![With/Without comparison of request validation](screenshots/07_malicious.png)
-
-## 8. With/Without [4]: Slowloris
+## 7. With/Without [3]：不換行的超長請求
 
 ```bash
-sed -n '/^==== \[4\]/,/\[4\] with:/p' logs/test_robustness.log
+sed -n '/^==== \[3\]/,/with: rejected after/p' logs/test_robustness.log
 ```
 
-32 `--mode slow` clients each send 1 byte every 0.5 seconds and never send a newline, filling the server's default 32 slots. 4 seconds later a normal client arrives. Without, the 32 children are still waiting and the normal client gets `ERROR server busy`; With, the 32 get `ERROR request timeout` at the 3-second mark (in 3 seconds each has sent only 7 bytes, not even all of `SYSINFO`), and the normal client is served.
+Without 時緩衝區一路加倍到 32 MiB，child 的 RSS 約 17 MiB；With 時讀到 127 bytes 就回 `ERROR request too long`。
 
-![With/Without comparison of the request deadline](screenshots/08_slowloris.png)
+緩衝區配置到 32 MiB，但實際只寫入 16 MiB；沒寫到的部分 Linux 不會配實體記憶體，所以 RSS 約 17 MiB。With 的 `ps` 沒有列出 child，是因為 child 拒絕請求後 2 ms 內就結束了。
 
-## 9. With/Without [5]: the server ends
+![請求長度上限的 With/Without 對比](screenshots/07_longline.png)
 
-### 9.1 [5a] The parent gets `kill -9`
+## 8. With/Without [4]：連線上限
 
 ```bash
-sed -n '/^==== \[5a\]/,/\[5a\] with:/p' logs/test_robustness.log
+sed -n '/^==== \[4\]/,/with -m 5:/p' logs/test_robustness.log
 ```
 
-Without, the child becomes an orphan (its PPID changes) and sends all 10 snapshots; With, the child exits along with the parent, and the client receives only 3.
+Without 時 10 個閒置 client 佔住 10 個 child；With（`-m 5`）時只有 5 個 child，另外 5 個 client 立刻收到 `ERROR server busy`。
 
-![With/Without comparison of PR_SET_PDEATHSIG](screenshots/09_pdeathsig.png)
+![連線上限的 With/Without 對比](screenshots/08_limit.png)
 
-### 9.2 [5b] `Ctrl+C`
+## 9. With/Without [5]：parent 被 `kill -9`
 
 ```bash
-sed -n '/^==== \[5b\]/,/\[5b\] with:/p' logs/test_robustness.log
+sed -n '/^==== \[5\]/,/with: the child ends/p' logs/test_robustness.log
 ```
 
-The test puts the server in its own process group and simulates `Ctrl+C` with `kill -INT -<pgid>`. Without, signal 2 kills the server and its child together, and the client receives only 3 snapshots; With, new clients are refused at once (connection refused), the client being served receives all 10, and the server exits with code 0 after its child finishes.
+Without 時 child 變成孤兒（PPID 改變）並把 10 筆送完；With 時 child 跟著 parent 結束，client 只收到 3 筆。
 
-![With/Without comparison of graceful shutdown](screenshots/09_ctrl_c.png)
+![PR_SET_PDEATHSIG 的 With/Without 對比](screenshots/09_pdeathsig.png)
 
-## 10. Summary of the seven With/Without pairs
+## 10. 五組 With/Without 總表
 
 ```bash
 sed -n '/With \/ Without summary/,$p' logs/test_robustness.log
 ```
 
-![Robustness summary](screenshots/10_robust_summary.png)
+![穩健性總表](screenshots/10_robust_summary.png)
 
-## 11. tcpdump capture: one connection from start to finish
+## 11. tcpdump 抓包：一條連線的完整過程
 
 ```bash
 tcpdump -r logs/capture.pcap -n -c 10
 ```
 
-The first connection the test captured (`SYSINFO`): the three-way handshake (`[S]`, `[S.]`, `[.]`), the 8-byte request, the 109-byte reply, and finally one FIN from each side (`[F.]`).
+三向交握（`[S]`、`[S.]`、`[.]`）、8 bytes 的請求、107 bytes 的回應，最後雙方各送一次 FIN（`[F.]`）。
 
-![tcpdump reading back the capture file](screenshots/11_tcpdump.png)
+![tcpdump 讀回抓包檔](screenshots/11_tcpdump.png)
 
-## 12. Header analysis of the request packet
+## 12. 請求封包的標頭分析
 
 ```bash
 sed -n '/Bytes of the request packet/,/payload (8 bytes)/p' logs/test_capture.log
 ```
 
-The test reads the pcap file directly and breaks the request packet into Ethernet (14 bytes), IPv4 (20 bytes), TCP (32 bytes) and the payload (`SYSINFO\n`), explaining each field. The IPv4 part includes type of service and fragment offset; the TCP part includes data offset, reserved, the 6 flag bits (`URG 0 ACK 1 PSH 1 RST 0 SYN 0 FIN 0`), the window size after multiplying by the window scale (64 × 2^10 = 65536 bytes), the urgent pointer, and the options (NOP, NOP, timestamps).
+測試程式直接讀 pcap 檔，把請求封包拆成 Ethernet（14 bytes）、IPv4（20 bytes）、TCP（32 bytes）和 payload（`SYSINFO\n`），逐欄說明。
 
-![Header fields of the request packet](screenshots/12_header_fields.png)
+![請求封包的標頭欄位](screenshots/12_header_fields.png)
 
-## 13. Wireshark packet analysis
+## 13. Wireshark 封包分析
 
-Open `logs/capture.pcap` in Wireshark, enter the display filter `tcp.port == 9090`, right-click packet 4 (`[PSH, ACK]`, Len=8) and choose Follow → TCP Stream. Wireshark changes the filter to `tcp.stream eq 0` and keeps only the 10 packets of the first connection, which match the tcpdump output above; in the lower pane, the red text is the `SYSINFO` the client sent and the blue text is the `OK seq=1 ...` the server sent back.
+用 Wireshark 開啟 `logs/capture.pcap`，display filter 輸入 `tcp.port == 9090`，對第 4 個封包（`[PSH, ACK]`，Len=8）按右鍵選 Follow → TCP Stream。Wireshark 會把 filter 換成 `tcp.stream eq 0`，只留下第一條連線的 10 個封包，和上一張 tcpdump 的結果一致；下方視窗紅字是 client 送的 `SYSINFO`，藍字是 server 回的 `OK seq=1 ...`。
 
-![Wireshark packet analysis](screenshots/13_wireshark.png)
+![Wireshark 封包分析](screenshots/13_wireshark.png)
 
-## 14. tcpdump filter for SYN packets
+## 14. Real Test：Windows client 連到 WSL2 的 server
 
-```bash
-tcpdump -r logs/capture.pcap -n 'tcp[13] & 2 == 2'
-```
-
-`tcp[13]` is byte 13 of the TCP header, which holds the flags; `& 2` picks out the SYN bit. The capture file has 4 connections, so only 8 packets remain: one `[S]` and one `[S.]` for each connection. The SYN packets carry options such as MSS, SACK permitted, timestamp and window scale.
-
-![Only SYN and SYN+ACK remain](screenshots/14_syn_filter.png)
-
-## 15. Half close
+先在 WSL 編出 Windows 版 client（需要 mingw-w64），並查出 WSL 的 IP：
 
 ```bash
-sed -n '/Half close (connection 4)/,/replies after/p' logs/test_capture.log
+make win-client && hostname -I
 ```
 
-Connection 4 is `./client -n 3 -w 200 --half-close`. After sending `WATCH 3 200` (length 12), the client calls `shutdown(fd, SHUT_WR)`; packet 6 is the client's `[F.]`, and at that point the server has not replied yet. After that the server still sends one line every 200 ms (packets 7, 9 and 11, 109 bytes each) and sends its own `[F.]` only when it is done. The two directions of a TCP connection can be closed separately: the client no longer sends data, but it can still receive.
+WSL 終端機：
 
-![The half-closed connection](screenshots/15_half_close.png)
+```bash
+./server -d 1
+```
+
+Windows PowerShell，在專案資料夾執行，IP 換成上面 `hostname -I` 查到的位址：
+
+```powershell
+.\win_client.exe 172.17.107.87 9090 "WATCH 3 500"
+```
+
+兩張圖是同一次連線。client 端顯示自己的位址是 Windows 的 `172.17.96.1:57920`，server log 的 `accepted 172.17.96.1:57920 -> child pid 3992` 是同一條連線，不是 `127.0.0.1`。3 行回覆間隔約 500 ms，`pid=3992` 都是同一個 child，最後 child 以 exit 0 結束並被回收。
+
+![Real Test：WSL2 上的 server](screenshots/14_real_test_wsl.png)
+
+![Real Test：Windows 上的 client](screenshots/14_real_test_windows.png)
+
+## 15. Real Test 的 Wireshark 抓包
+
+用 Wireshark 開啟 `logs/real_test.pcapng`（共 34 個封包、3 條連線），display filter 輸入 `tcp.stream eq 0`，只看第一條連線（`SYSINFO`）的 10 個封包：三向交握、8 bytes 的請求、108 bytes 的回應，以及雙方的 FIN。來源和目的地是 `172.17.96.1` 和 `172.17.107.87`。選第 4 個封包（`[PSH, ACK]`，Len=8），下方的 Ethernet II 位址是 Hyper-V 虛擬網卡（`00:15:5d:...`），表示封包走的是虛擬網路，不是 loopback；右邊的 hex 結尾是 `53 59 53 49 4e 46 4f 0a`（`SYSINFO\n`）。
+
+![Real Test 的 Wireshark 抓包](screenshots/15_real_wireshark.png)

@@ -8,6 +8,7 @@
 #   make test-capture tcpdump capture of one request, decoded (needs root / sudo)
 #   make inspect      exported symbols of libutils.so and ldd linkage
 #   make capture      live tcpdump of the server port on loopback (needs sudo)
+#   make win-client   win_client.exe for the Real Test from Windows (needs mingw-w64)
 #
 # -Wl,-rpath,'$ORIGIN' makes each binary load the libutils.so sitting next to
 # it, from any working directory.
@@ -32,8 +33,10 @@ TEST_CFLAGS := -Wall -Wextra -pedantic -std=gnu11 -O2 -g
 TEST_NAMES  := demo test_concurrent test_robustness test_debug test_capture
 TEST_BINS   := $(addprefix tests/,$(TEST_NAMES))
 
+WIN_CC      := x86_64-w64-mingw32-gcc
+
 .PHONY: all release demo test test-concurrent test-robust test-debug test-capture \
-        inspect capture test-programs clean clean-build
+        inspect capture win-client test-programs clean clean-build
 
 all: $(LIB) $(BINS)
 
@@ -83,11 +86,17 @@ inspect: all
 	@ldd ./server ./client
 
 capture:
-	sudo tcpdump -i lo -l -vn -e -x 'tcp port $(PORT)'
+	sudo tcpdump -i lo -n -x 'tcp port $(PORT)'
+
+# Real Test: a Winsock client to run on Windows against the server in WSL2.
+win-client: win_client.exe
+
+win_client.exe: tests/win_client.c
+	$(WIN_CC) -Wall -Wextra -pedantic -std=gnu11 -O2 -o $@ $< -lws2_32
 
 # Used by the test programs: removes the build but keeps the running test binaries.
 clean-build:
 	rm -f $(LIB) $(BINS) .build_flags
 
 clean: clean-build
-	rm -f $(TEST_BINS)
+	rm -f $(TEST_BINS) win_client.exe

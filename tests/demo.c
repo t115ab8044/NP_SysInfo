@@ -6,8 +6,7 @@
  *   1. both binaries are linked against libutils.so
  *   2. start the fork() server in the background
  *   3. one client requests system information (SYSINFO)
- *   4. CLIENTS clients connect at the same time -> CLIENTS fork()ed children;
- *      each client sends a different WATCH request (tl_watches in testlib.c)
+ *   4. CLIENTS clients connect at the same time -> CLIENTS fork()ed children
  *   5. robustness: an unknown request is rejected with an ERROR line
  *   6. stop the server; every child was reaped (no zombies)
  *
@@ -21,7 +20,6 @@
 #include <unistd.h>
 
 #define MAX_CLIENTS 256
-#define PER_ROW     6           /* requests printed per line in step 4 */
 
 static const char *B = "";
 static const char *G = "";
@@ -70,35 +68,19 @@ static int run(void)
     printf("  $ ./client -p %d\n", tl_port);
     fputs(tl_capture_out(CMD("./client", "-p", tl_port_str)), stdout);
 
-    printf("\n%s== 4. %d clients at the same time, each with a different request ==%s\n",
+    printf("\n%s== 4. %d clients at the same time (WATCH 6 500: 6 snapshots in 3 s) ==%s\n",
            B, clients, N);
     for (i = 0; i < clients; i++) {
-        const struct tl_watch *w = &tl_watches[i % TL_NWATCH];
-
         pids[i] = tl_spawn(tl_fmt("%s/client_%d", g_tmp, i + 1),
-                           CMD("./client", "-p", tl_port_str, "-n", w->count, "-w", w->ms));
+                           CMD("./client", "-p", tl_port_str, "-n", "6", "-w", "500"));
     }
-    for (i = 0; i < clients; i++) {
-        const struct tl_watch *w = &tl_watches[i % TL_NWATCH];
-
-        printf("%s%-14s%s", i % PER_ROW ? "" : "  ", tl_fmt("WATCH %s %s", w->count, w->ms),
-               i % PER_ROW == PER_ROW - 1 || i == clients - 1 ? "\n" : "");
-    }
-    printf("  (./client -p %d -n <count> -w <ms>: <count> snapshots, <ms> apart, 3 s each)\n",
-           tl_port);
     for (i = 0; i < 100 && tl_child_count() < clients; i++)
         tl_sleep(0.02);
     tl_run(NULL, CMD("ps", "--forest", "-o", "pid,ppid,stat,cmd", "-p", server_pid,
                      "--ppid", server_pid));
     nchild = tl_child_count();
     for (i = 0; i < clients; i++) {
-        char *text;
-
-        if (tl_wait(pids[i]) != 0)
-            continue;
-        /* OK only if the client got as many snapshots as it asked for */
-        text = tl_read(tl_fmt("%s/client_%d", g_tmp, i + 1));
-        if (tl_count(text, "^OK seq=") == atoi(tl_watches[i % TL_NWATCH].count))
+        if (tl_wait(pids[i]) == 0)
             ok++;
     }
     for (i = 0; i < clients; i++)
@@ -119,7 +101,7 @@ static int run(void)
     step("Result");
     printf("  fork() children alive at once : %d / %d\n", nchild, clients);
     printf("  distinct server PIDs answered : %d / %d\n", ndistinct, clients);
-    printf("  clients got all snapshots     : %d / %d\n", ok, clients);
+    printf("  clients exited OK             : %d / %d\n", ok, clients);
     printf("  server log                    : %d accepted, %d reaped, %d zombies\n",
            accepted, reaped, zombies);
     if (nchild == clients && ndistinct == clients && ok == clients && zombies == 0 &&

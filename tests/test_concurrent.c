@@ -2,9 +2,8 @@
  * test_concurrent.c - proof that the fork() server serves 12 clients at once.
  *
  *   1. start ./server
- *   2. launch 12 ./client processes at the same moment, each with a
- *      different request (WATCH 2 3000 ... WATCH 31 100, tl_watches in
- *      testlib.c); every one stays connected for 3 seconds
+ *   2. launch 12 ./client processes at the same moment; each asks for
+ *      WATCH 6 500, so it stays connected for about 3 seconds
  *   3. while all are connected: ps aux snapshot, process tree (PPID) and the
  *      established TCP connections
  *   4. cross-check: the server child PID in each client's replies must be one
@@ -23,6 +22,8 @@
 #include <string.h>
 
 #define MAX_CLIENTS 256
+#define SNAPSHOTS   "6"
+#define INTERVAL_MS "500"
 #define PS_ROW "^([^[:space:]]+[[:space:]]+){10}"
 
 static int run(int clients, const char *tmp)
@@ -41,8 +42,8 @@ static int run(int clients, const char *tmp)
     printf("date     : %s\n", tl_date());
     printf("kernel   : %s\n", tl_kernel());
     printf("compiler : %s\n", tl_compiler());
-    printf("test     : %d concurrent clients, each sends a different WATCH request (3 s each)\n",
-           clients);
+    printf("test     : %d concurrent clients, each asks for WATCH %s %s (about 3 s)\n",
+           clients, SNAPSHOTS, INTERVAL_MS);
 
     tl_heading("Build (make)");
     if (tl_run(NULL, CMD("make", "-s", "all")) != 0)
@@ -61,17 +62,11 @@ static int run(int clients, const char *tmp)
 
     tl_heading("Launch %d clients at the same moment", clients);
     for (i = 0; i < clients; i++) {
-        const struct tl_watch *w = &tl_watches[i % TL_NWATCH];
-
         pids[i] = tl_spawn(tl_fmt("%s/client_%0*d.txt", tmp, width, i + 1),
-                           CMD("./client", "-p", tl_port_str, "-n", w->count, "-w", w->ms));
+                           CMD("./client", "-p", tl_port_str, "-n", SNAPSHOTS, "-w", INTERVAL_MS));
     }
-    for (i = 0; i < clients; i++) {
-        const struct tl_watch *w = &tl_watches[i % TL_NWATCH];
-
-        printf("$ %-30s (client %0*d, background)\n",
-               tl_fmt("./client -p %d -n %s -w %s", tl_port, w->count, w->ms), width, i + 1);
-    }
+    printf("$ ./client -p %d -n %s -w %s   x %d (background)\n",
+           tl_port, SNAPSHOTS, INTERVAL_MS, clients);
     fputs("client PIDs:", stdout);
     for (i = 0; i < clients; i++)
         printf(" %d", (int)pids[i]);
@@ -99,15 +94,14 @@ static int run(int clients, const char *tmp)
     }
     tl_write(client_log, "", 0);
     for (i = 0; i < clients; i++) {
-        const struct tl_watch *w = &tl_watches[i % TL_NWATCH];
         const char *file = tl_fmt("%s/client_%0*d.txt", tmp, width, i + 1);
         char *text = tl_read(file);
         int lines = tl_count(text, "^OK seq=");
         char *pid = tl_match(text, "pid=[0-9]+");
 
-        printf("[client %0*d] %-13s -> %2d snapshot(s), served by %s\n", width, i + 1,
-               tl_fmt("WATCH %s %s", w->count, w->ms), lines, pid ? pid : "?");
-        if (lines == atoi(w->count))
+        printf("[client %0*d] %d snapshot(s), served by %s\n", width, i + 1, lines,
+               pid ? pid : "?");
+        if (lines == atoi(SNAPSHOTS))
             full++;
         tl_append_prefixed(file, tl_fmt("[client %0*d] ", width, i + 1), client_log);
     }
@@ -127,8 +121,8 @@ static int run(int clients, const char *tmp)
     reaped = tl_file_count(server_log, "reaped child");
     active_max = tl_match(tl_read(server_log), tl_fmt("accepted .*active=%d$", clients));
 
-    tl_heading("Server log (accept, request and reap)");
-    tl_print_lines(tl_grep(tl_read(server_log), "accepted|snapshot\\(s\\)$|reaped", 0), "", 0);
+    tl_heading("Server log (accept and reap)");
+    tl_print_lines(tl_grep(tl_read(server_log), "accepted|reaped", 0), "", 0);
     printf("after the clients left: %d child process(es), %d zombie(s)\n", left, zombies);
 
     tl_heading("Stop server (SIGTERM)");
@@ -143,8 +137,8 @@ static int run(int clients, const char *tmp)
               clients, clients + 1);
     tl_expect(established == clients, "%d established TCP connections at the same time", clients);
     tl_expect(active_max != NULL, "server log reaches active=%d", clients);
-    tl_expect(ok == clients && full == clients,
-              "all %d clients got the number of snapshots they asked for and exited 0", clients);
+    tl_expect(ok == clients && full == clients, "all %d clients got %s snapshots and exited 0",
+              clients, SNAPSHOTS);
     tl_expect(ndistinct == clients, "clients were answered by %d distinct server PIDs", clients);
     tl_expect(unknown == 0, "every answering PID is a child seen in the ps snapshot");
     tl_expect(zombies + left == 0, "no zombie or leftover children after the clients left");
