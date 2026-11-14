@@ -281,7 +281,7 @@ The test programs are all written in C and run other programs with `fork` + `exe
 
 ### 6.1 test_concurrent: 12 concurrent clients
 
-12 clients send `WATCH 6 500` at the same time, and each connection lasts about 3 seconds. During that time the test takes a snapshot with `ps aux` and of the process tree:
+12 clients send `WATCH 6 500` at the same time, and each connection lasts about 3 seconds. During that time the test takes snapshots of `ps aux` and of the process tree:
 
 ```text
     PID    PPID STAT     ELAPSED CMD
@@ -304,7 +304,7 @@ The numbers below come from `logs/test_robustness.log`.
 | Mechanism | Scenario | Without (off) | With (default) |
 |---|---|---|---|
 | [1] Reaping children | 3 clients query one after another | **3** `[server] <defunct>` zombies | 0 zombies; the log records 3 reaps |
-| [2] Ignoring SIGPIPE | `--mode abort`: disconnects after 1 line | Child `killed by signal 13 (Broken pipe)` | `client left before snapshot 3/10`, the child exits 3 |
+| [2] Ignoring SIGPIPE | `--mode abort`: disconnects after 1 line | The child is `killed by signal 13 (Broken pipe)` | `client left before snapshot 3/10`, the child exits 3 |
 | [3] Length limit | `--mode longline`: 16 MiB with no newline | The buffer grows to **32768 KiB**, child RSS **17808 KiB** | `ERROR request too long` after 127 bytes |
 | [4] Connection limit | 10 `--mode idle` clients connect at the same time | **10** child processes | 5 child processes; the other 5 clients get `ERROR server busy` |
 | [5] pdeathsig | `kill -9` the parent during `WATCH 10 300` | The child becomes an **orphan** (its PPID changes) and sends all 10 | The child ends with the parent; the client gets only 3/10 |

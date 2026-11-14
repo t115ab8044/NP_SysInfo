@@ -54,7 +54,7 @@ The release build has 0 debug strings and no logger calls inside `write_all()`; 
 ./server 2>/dev/null & sleep 0.3; for i in 1 2 3; do ./client >/dev/null 2>&1; done; sleep 0.3; ps -o pid,ppid,stat,cmd --ppid $!; kill $!
 ```
 
-Without leaves 3 `<defunct>` children in state `Z`; With leaves no child behind.
+Without: 3 `<defunct>` children stay in state `Z`; With: no child is left behind.
 
 ![Zombie processes, With/Without](screenshots/05_zombie.png)
 
