@@ -121,7 +121,7 @@ struct host_info {
     double load[3];                 /* 1, 5 and 15 minute load average */
     unsigned long long mem_total_kb;
     unsigned long long mem_avail_kb;
-    unsigned procs;                 /* number of processes */
+    unsigned procs;                 /* tasks, threads included (sysinfo(2)) */
 };
 
 /* Fill *out from gethostname(), sysinfo(2), getloadavg() and /proc/meminfo. */
