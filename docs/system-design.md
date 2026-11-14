@@ -1,67 +1,67 @@
-# 系統設計說明（System Design Explanation）
+# System Design Explanation
 
-[← 回到 README](../README.md) ・ [關鍵原始碼說明](key-source.md) ・ [執行截圖](screenshots.md)
+[← Back to README](../README.md) · [Key Source Code](key-source.md) · [Execution Screenshots](screenshots.md)
 
-## 1. 應用情境與目標
+## 1. Use Case and Goals
 
-管理多台 Linux 主機時，常需要快速知道每台主機的負載和記憶體狀況。主機上跑 **server**，其他人不用登入主機，用 **client** 就能查詢一次，或連續觀察幾秒鐘的變化。
+When you manage several Linux hosts, you often need a quick look at each host's load and memory. With the **server** running on a host, other people can use the **client** to query it once, or watch it change over a few seconds, without logging in to the host.
 
-| 目標 | 設計上的對應 | 怎麼驗證 |
+| Goal | How the design meets it | How it is verified |
 |---|---|---|
-| 多個 client 同時查詢，彼此不影響（至少 10 個） | 每條連線 `fork()` 一個 child（預設最多 32 個），一個 child 出錯不影響 parent 和其他連線 | `test_concurrent`：12 個 client 同時送出不同的 `WATCH`，`ps` 看到 12 個 child，12 個 client 收到的 `pid=` 都不同（[README 6.1](../README.md#61-test_concurrent12-個-client-併發)） |
-| 遇到異常不當掉，不留殭屍和孤兒程序 | 7 個穩健機制，處理 child 回收、連線中斷、惡意請求、慢速連線、server 結束五類異常 | `test_robustness`：每個機制關閉、開啟各跑一次，比較兩次的結果（[README 6.2](../README.md#62-test_robustness七組-withwithout-對照)） |
-| 每個保護機制都看得到效果 | 每個機制都能用參數關閉，實際比較有無機制的差異 | 同上：7 組對照由同一支測試自動跑出，結果彙整在 `logs/test_robustness.log` |
-| 出問題時能追查 | 兩層 Debug：編譯期決定有沒有 debug 程式碼，執行期決定印多少 | `test_debug`：release 版的執行檔裡找不到 debug 字串；debug 版用 `-d 0/1/2` 處理一次 `SYSINFO`，log 依序是 7、12、22 行（[README 6.3](../README.md#63-test_debug雙層-debug)） |
+| Several clients query at once without affecting each other (at least 10) | Each connection gets its own `fork()`ed child (up to 32 by default), and an error in one child does not affect the parent or the other connections | `test_concurrent`: 12 clients send different `WATCH` requests at once, `ps` shows 12 children, and the 12 clients receive 12 different `pid=` values ([README 6.1](../README.md#61-test_concurrent-12-concurrent-clients)) |
+| Do not crash on failures, and leave no zombie or orphan processes | 7 robustness mechanisms that handle five kinds of failure: child reaping, broken connections, malicious requests, slow connections, and the server ending | `test_robustness`: each mechanism runs once off and once on, and the two results are compared ([README 6.2](../README.md#62-test_robustness-seven-withwithout-comparisons)) |
+| The effect of every protection can be seen | Each mechanism can be turned off with a flag, so the difference with and without it can actually be compared | Same as above: one test runs all 7 comparisons automatically, and the results are collected in `logs/test_robustness.log` |
+| Problems can be traced | Two-level debug: compile time decides whether there is any debug code, runtime decides how much is printed | `test_debug`: no debug strings can be found in the release executables; the debug build handles one `SYSINFO` with `-d 0/1/2`, and the log has 7, 12 and 22 lines respectively ([README 6.3](../README.md#63-test_debug-two-level-debug)) |
 
-期中規定與本專案做法的逐條對照見 [README 需求對照](../README.md#需求對照)。
+The point-by-point mapping of the midterm requirements to this project is in [README Requirements Mapping](../README.md#requirements-mapping).
 
 
-## 2. 系統架構
+## 2. System Architecture
 
 ```mermaid
 flowchart TD
     C["client 1 … N"]
     subgraph SRV["server"]
-        subgraph P["Server parent（一個程序）"]
-            A["主迴圈<br/>accept → 檢查上限<br/>→ fork"]
-            H["Signal handlers<br/>[1] SIGCHLD：迴圈回收<br/>[5b] SIGINT：停止 accept"]
+        subgraph P["Server parent (one process)"]
+            A["Main loop<br/>accept → check the limit<br/>→ fork"]
+            H["Signal handlers<br/>[1] SIGCHLD: reap in a loop<br/>[5b] SIGINT: stop accepting"]
         end
-        K["Child 1 … N<br/>（預設最多 32 個）<br/>[2a] 處理 EPIPE<br/>[2b] TCP_USER_TIMEOUT<br/>[3] 驗證請求<br/>[4] 請求 3 秒內送完<br/>[5a] PDEATHSIG<br/>[5b] 忽略 SIGINT"]
+        K["Child 1 … N<br/>(up to 32 by default)<br/>[2a] handle EPIPE<br/>[2b] TCP_USER_TIMEOUT<br/>[3] validate the request<br/>[4] request within 3 s<br/>[5a] PDEATHSIG<br/>[5b] ignore SIGINT"]
     end
     OS{{"Linux kernel"}}
     SO[("libutils.so")]
 
     C ==>|"① connect :9090"| A
-    A ==>|"滿了：ERROR server busy"| C
-    A -->|"② fork，連線交給 child"| K
-    C <==>|"③ 請求與回覆"| K
-    K <-.->|"④ 讀取 /proc、sysinfo(2)<br/>⑤ _exit(0–4)<br/>[5a] parent 死掉時<br/>收到 SIGTERM"| OS
+    A ==>|"full: ERROR server busy"| C
+    A -->|"② fork, hand the connection to the child"| K
+    C <==>|"③ request and reply"| K
+    K <-.->|"④ read /proc, sysinfo(2)<br/>⑤ _exit(0–4)<br/>[5a] SIGTERM when<br/>the parent dies"| OS
     H <-.->|"⑥ SIGCHLD → waitpid()"| OS
     C --- SO
     SRV --- SO
 ```
 
-**圖例：** 粗線是 TCP 上的資料，細實線是 `fork()`，虛線是和 kernel 之間的互動（讀取系統資訊、程序結束、訊號、回收），沒有箭頭的線是動態連結。①～⑥ 是一條連線的先後順序；[1]～[5b] 是[第 5 節](#5-穩健性設計)的穩健機制，標在負責它的程序上。
+**Legend:** Thick lines are data over TCP, thin solid lines are `fork()`, dashed lines are interactions with the kernel (reading system information, process exit, signals, reaping), and lines without arrows are dynamic linking. ① to ⑥ give the order of events on one connection; [1] to [5b] are the robustness mechanisms of [Section 5](#5-robustness-design), each placed on the process responsible for it.
 
-### 程序模型（Process Model）
+### Process Model
 
-| 角色 | 職責 | 不做的事 |
+| Role | Responsibilities | What it does not do |
 |---|---|---|
-| **Parent** | `accept()`、檢查連線上限、`fork()`、回收 child、記錄 log；`Ctrl+C` 時等 child 做完再結束 | 不讀 client 的資料；只有在達上限時寫一行 `ERROR server busy` |
-| **Child** | 讀一行請求、驗證、回覆、`_exit(原因代碼)` | 不 accept（一 fork 就關掉 listening socket）；不理會 `Ctrl+C`，由 parent 決定什麼時候結束 |
+| **Parent** | `accept()`, check the connection limit, `fork()`, reap children, write the log; on `Ctrl+C`, wait for the children to finish before exiting | Does not read client data; writes only the one line `ERROR server busy` when the limit is reached |
+| **Child** | Read one request line, validate it, reply, `_exit(reason code)` | Does not accept (it closes the listening socket right after the fork); ignores `Ctrl+C` and lets the parent decide when to end |
 
-整個專案沒有使用 thread。
+The project uses no threads anywhere.
 
-### 資料流（Data Flow）
+### Data Flow
 
-連線交給 child 後，請求與回應只在 **client 和 child 之間**傳送。child 結束時 kernel 送出 **SIGCHLD**，parent 用 **`waitpid()`** 回收並記錄 exit code，不留下殭屍程序。
+Once the connection is handed to the child, requests and replies travel only **between the client and the child**. When the child exits, the kernel sends **SIGCHLD**, and the parent reaps the child with **`waitpid()`** and records its exit code, so no zombie processes are left.
 
-### 共用函式庫（Shared Library）
+### Shared Library
 
-client 和 server 都動態連結 **`libutils.so`**：logger、`write_all`、`read_line`／`read_line_timeout`、系統資訊擷取與格式化。server 的回覆由 `sysinfo_format()` 產生，client 用 `read_line()` 讀回來直接印出。
+The client and the server both link **`libutils.so`** dynamically: the logger, `write_all`, `read_line`/`read_line_timeout`, and system information collection and formatting. The server's reply is produced by `sysinfo_format()`, and the client reads it back with `read_line()` and prints it as it is.
 
 
-## 3. 執行流程
+## 3. Execution Flow
 
 ```mermaid
 sequenceDiagram
@@ -70,108 +70,108 @@ sequenceDiagram
     participant K as Child
     participant OS as Kernel
     C->>P: connect()
-    P->>P: accept() 得到 cfd，檢查連線上限
+    P->>P: accept() returns cfd, check the connection limit
     P->>K: fork()
-    Note over P,K: fork 後兩個程序都有 lfd 和 cfd
-    P->>P: close(cfd)：連線交給 child
-    K->>K: close(lfd)：child 不 accept
+    Note over P,K: after the fork both processes hold lfd and cfd
+    P->>P: close(cfd) hands the connection to the child
+    K->>K: close(lfd) since the child does not accept
     C->>K: "SYSINFO\n"
     K->>C: "OK seq=1 pid=... \n"
-    K->>C: close(cfd)（FIN）
+    K->>C: close(cfd) (FIN)
     K->>OS: _exit(0)
     OS-->>P: SIGCHLD
-    P->>OS: waitpid() 迴圈回收
-    P->>P: 回到主迴圈，寫 log「reaped child ... exit 0」
+    P->>OS: waitpid() loop reaps the child
+    P->>P: back in the main loop, log "reaped child ... exit 0"
 ```
 
-兩個 `close()` 讓每條連線只有一個程序持有：parent 只留 listening socket，child 只留自己的連線，所以 parent 的 fd 數量不會隨著服務過的 client 增加。用 `ls -l /proc/<pid>/fd` 就能檢查 parent 和 child 各自持有哪些 socket。
+The two `close()` calls leave each connection held by exactly one process: the parent keeps only the listening socket and the child keeps only its own connection, so the parent's fd count does not grow with the number of clients it has served. `ls -l /proc/<pid>/fd` shows which sockets the parent and each child hold.
 
-### 請求與回應
+### Requests and Replies
 
-| Client 送出 | Server 回覆 |
+| Client sends | Server replies |
 |---|---|
-| `SYSINFO` | 一行 `OK seq=1 pid=... host=... up=... load=... mem_avail=... procs=...` |
-| `WATCH <count> <ms>` | 每隔 `<ms>` 毫秒一行，共 `<count>` 行（count 1–100，ms 100–10000） |
-| 錯誤的請求 | 一行 `ERROR <原因>`，然後關閉 |
+| `SYSINFO` | One line `OK seq=1 pid=... host=... up=... load=... mem_avail=... procs=...` |
+| `WATCH <count> <ms>` | One line every `<ms>` milliseconds, `<count>` lines in total (count 1–100, ms 100–10000) |
+| A bad request | One line `ERROR <reason>`, then the connection is closed |
 
-一條連線只處理一個請求。回覆裡的 `pid=` 是處理這條連線的 child，抓包或 client 輸出都能直接看出是哪個程序服務的。
+Each connection handles one request. The `pid=` in the reply is the child that handles this connection, so a packet capture and the client's output both show directly which process served it.
 
-`OK` 那一行的欄位如下；`WATCH` 的每一行都會重新讀取一次：
+The fields of the `OK` line are listed below; each line of a `WATCH` reads them again:
 
-| 欄位 | 意義 | 格式 | 來源 |
+| Field | Meaning | Format | Source |
 |---|---|---|---|
-| `seq` | 這條連線的第幾行回覆：`SYSINFO` 固定是 1，`WATCH` 從 1 數到 count | 整數 | child 的迴圈計數 |
-| `pid` | 處理這條連線的 child | 整數 | `getpid()` |
-| `host` | 主機名稱 | 字串，讀不到時是 `unknown` | `gethostname()` |
-| `up` | 開機多久 | 天、時:分:秒，例如 `0d 00:00:30` | `sysinfo(2)` 的 `uptime` |
-| `load` | 1、5、15 分鐘的平均負載 | 三個小數，以 `/` 分開 | `getloadavg()` |
-| `mem_avail` | 可用記憶體／總記憶體 | GiB，小數兩位 | `/proc/meminfo` 的 `MemAvailable`、`MemTotal`；讀不到時改用 `sysinfo(2)` 估算 |
-| `procs` | 整台主機的 task 總數 | 整數 | `sysinfo(2)` 的 `procs` |
+| `seq` | Which reply line this is on the connection: always 1 for `SYSINFO`, counting from 1 to count for `WATCH` | Integer | The child's loop counter |
+| `pid` | The child that handles this connection | Integer | `getpid()` |
+| `host` | Host name | String; `unknown` if it cannot be read | `gethostname()` |
+| `up` | Time since boot | Days and hh:mm:ss, for example `0d 00:00:30` | `uptime` from `sysinfo(2)` |
+| `load` | Load average over 1, 5 and 15 minutes | Three decimals separated by `/` | `getloadavg()` |
+| `mem_avail` | Available memory / total memory | GiB, two decimal places | `MemAvailable` and `MemTotal` in `/proc/meminfo`; estimated from `sysinfo(2)` if they cannot be read |
+| `procs` | Total number of tasks on the host | Integer | `procs` from `sysinfo(2)` |
 
-`procs` 不是程序數：kernel 把每個 thread（包含 kernel thread）都算成一個 task，所以會比 `ps` 列出的程序多，數字和 `/proc/loadavg` 第 4 欄 `/` 後面的總數相同。
+`procs` is not the number of processes: the kernel counts every thread (kernel threads included) as a task, so it is larger than the number of processes `ps` lists. It equals the total after the `/` in the 4th field of `/proc/loadavg`.
 
-### Parent 主迴圈
+### Parent Main Loop
 
-parent 重複「**輸出回收紀錄 → `accept()` → 檢查上限 → `fork()`**」。`accept()` 被 SIGCHLD 打斷時回傳 `EINTR`，parent 回到迴圈開頭，先把剛回收的 child 寫進 log 再繼續等待。按下 `Ctrl+C` 後離開迴圈，等所有 child 做完才結束（[5b]）。
+The parent repeats "**print the reap records → `accept()` → check the limit → `fork()`**". When SIGCHLD interrupts `accept()`, it returns `EINTR`; the parent goes back to the top of the loop, first writes the children it just reaped to the log, and then waits again. After `Ctrl+C` it leaves the loop and exits only when every child has finished ([5b]).
 
-### Child 處理請求
+### Child Request Handling
 
-child 讀一行請求（最多 127 bytes，3 秒內要送完），判斷是 `SYSINFO`、`WATCH` 還是錯誤，回覆後結束。exit code 說明結束原因，parent 回收時寫進 log：
+The child reads one request line (at most 127 bytes, which must arrive within 3 seconds), decides whether it is `SYSINFO`, `WATCH` or an error, replies, and exits. The exit code gives the reason it ended, and the parent writes it to the log when it reaps the child:
 
-| exit code | 原因 |
+| Exit code | Reason |
 |---|---|
-| 0 | 請求處理完成 |
-| 1 | I/O 錯誤 |
-| 2 | 請求被拒絕（太長、未知指令、參數錯誤） |
-| 3 | client 已經離開（還沒送完請求就斷線，或寫入時收到 `EPIPE`），或網路斷了連不到（`ETIMEDOUT`） |
-| 4 | 請求逾時：3 秒內沒有送完一行 |
+| 0 | Request served |
+| 1 | I/O error |
+| 2 | Request rejected (too long, unknown command, bad arguments) |
+| 3 | The client is already gone (it disconnected before finishing the request, or a write got `EPIPE`), or the network is down and the client cannot be reached (`ETIMEDOUT`) |
+| 4 | Request timed out: a line was not finished within 3 seconds |
 
-## 4. 雙層 Debug
+## 4. Two-Level Debug
 
-| 層級 | 誰決定 | 效果 |
+| Level | Decided by | Effect |
 |---|---|---|
-| 編譯期 | `make`（`-DENABLE_DEBUG`）或 `make release` | release 版的 debug 程式碼和字串整個被拿掉，執行時零成本 |
-| 執行期 | `-d 0/1/2` | 0 只有一般訊息，1 加上程式流程（附 `file:line`），2 再加上請求和回覆的 hex dump |
+| Compile time | `make` (`-DENABLE_DEBUG`) or `make release` | The release build has the debug code and strings removed entirely, so they cost nothing at runtime |
+| Runtime | `-d 0/1/2` | 0 normal messages only, 1 adds the program flow (with `file:line`), 2 also adds hex dumps of the request and the reply |
 
-兩層缺一不可：正式上線用 release 版，完全沒有額外負擔；開發時用 debug 版，需要時才用 `-d` 打開，不用重新編譯。
+Both levels are needed: production uses the release build, with no extra overhead at all; development uses the debug build and turns the output on with `-d` only when it is needed, without recompiling.
 
-## 5. 穩健性設計
+## 5. Robustness Design
 
-7 個機制處理五類異常，每個機制都能用參數關閉，比較有無機制的差異。
+7 mechanisms handle five kinds of failure, and each mechanism can be turned off with a flag to compare the results with and without it.
 
-| 異常類型 | 會發生什麼 | 機制 | 關閉參數 |
+| Kind of failure | What happens | Mechanism | Flag to turn it off |
 |---|---|---|---|
-| child 回收：12 個 child 同時結束 | signal 不排隊，只收一次的寫法留下殭屍 | [1] SIGCHLD handler 內的 `waitpid` 迴圈 | `--reap-once` |
-| 連線：client 正常關閉 | child 寫入時被 SIGPIPE 殺掉 | [2a] 忽略 SIGPIPE，處理 `EPIPE` | `--no-sigpipe` |
-| 連線：client 的網路突然消失 | 沒有 FIN、RST，`write()` 一直成功，child 對空氣送資料 | [2b] `TCP_USER_TIMEOUT` 3 秒 | `--no-user-timeout` |
-| 輸入：惡意請求 | 記憶體無限長大、數字溢位、0 ms 洪水、27.8 小時的請求 | [3] 長度上限、`%3d %5d`、範圍檢查 | `--no-validate` |
-| 慢速連線：Slowloris | 32 條慢速連線佔滿名額，正常的 client 進不來 | [4] 整行請求 3 秒內要送完 | `--no-deadline` |
-| server 結束：parent 被 `kill -9` | child 變成孤兒，沒人管理 | [5a] `PR_SET_PDEATHSIG` | `--no-pdeathsig` |
-| server 結束：按 `Ctrl+C` | 正在服務的 client 被一起切斷 | [5b] 停止 accept，等 child 做完 | `--no-graceful` |
+| Child reaping: 12 children exit at once | Signals do not queue, and code that reaps only once per signal leaves zombies | [1] A `waitpid` loop in the SIGCHLD handler | `--reap-once` |
+| Connection: the client closes normally | SIGPIPE kills the child while it writes | [2a] Ignore SIGPIPE and handle `EPIPE` | `--no-sigpipe` |
+| Connection: the client's network suddenly vanishes | No FIN or RST arrives, `write()` keeps succeeding, and the child sends data into thin air | [2b] A 3-second `TCP_USER_TIMEOUT` | `--no-user-timeout` |
+| Input: malicious requests | Memory grows without limit, numbers overflow, a 0 ms flood, a 27.8-hour request | [3] A length limit, `%3d %5d`, and range checks | `--no-validate` |
+| Slow connections: Slowloris | 32 slow connections fill every slot, and normal clients cannot get in | [4] The whole request line must arrive within 3 seconds | `--no-deadline` |
+| Server ending: the parent gets `kill -9` | The children become orphans with nobody managing them | [5a] `PR_SET_PDEATHSIG` | `--no-pdeathsig` |
+| Server ending: `Ctrl+C` | Clients being served are cut off along with the server | [5b] Stop accepting and wait for the children to finish | `--no-graceful` |
 
-**兩兩成對：** [1] 和 [5a] 一個是「child 死了、parent 沒收」（殭屍），一個是「parent 死了、child 還在」（孤兒），合起來保證 child 的生命週期一定跟著 parent。[2a] 和 [2b] 都是 client 中途離開，差別在 client 有沒有機會通知 server。[5a] 和 [5b] 都是 server 結束，一個是被殺，一個是有人要它停下來；[5b] 等太久時，再由 [5a] 收掉剩下的 child。
+**They come in pairs:** Of [1] and [5a], one is "the child died and the parent did not reap it" (a zombie) and the other is "the parent died and the child lives on" (an orphan); together they guarantee that a child's lifetime always follows the parent's. [2a] and [2b] are both a client leaving midway; they differ in whether the client gets the chance to tell the server. [5a] and [5b] are both the server ending: in one it is killed, in the other someone asks it to stop; when [5b] waits too long, [5a] takes care of the remaining children.
 
-連線上限（`-m`，預設 32）是一般功能，不算在 7 個機制裡：它只能限制 child 的數量，擋不住 Slowloris，所以還需要 [4]。
+The connection limit (`-m`, default 32) is a regular feature, not one of the 7 mechanisms: it can only limit the number of children and cannot stop Slowloris, which is why [4] is also needed.
 
-**[4] 管不到的情況：** [4] 只管請求送完之前。請求本身合法時，例如 `WATCH 100 10000`，child 要送 99 × 10 秒，約 16.5 分鐘；同一台機器送 32 個這種請求，名額一樣會被佔滿，別人只會收到 `ERROR server busy`。目前沒有處理，列在[第 6 節](#6-設計取捨與限制)的限制。
+**What [4] cannot cover:** [4] only applies until the request has been sent. When the request itself is valid, for example `WATCH 100 10000`, the child sends for 99 × 10 seconds, about 16.5 minutes; if one machine sends 32 such requests, every slot is still taken and everyone else gets only `ERROR server busy`. This is not handled yet, and it is listed among the limitations in [Section 6](#6-design-trade-offs-and-limitations).
 
-實測對照見 [README 6.2](../README.md#62-test_robustness七組-withwithout-對照)。其中 [2b] 設定 3 秒，實測是斷線後 4.0 秒才停：3 秒從第一筆沒收到 ACK 的資料送出時開始算，而 child 每 0.5 秒才送一次，斷線後要等下一筆送出才開始計時，逾時後也要等下一次 `write()` 才收到 `ETIMEDOUT`。
+The measured comparisons are in [README 6.2](../README.md#62-test_robustness-seven-withwithout-comparisons). There, [2b] is set to 3 seconds, but the child actually stops 4.0 seconds after the cut: the 3 seconds start when the first data that gets no ACK is sent, and since the child sends only every 0.5 seconds, the timer starts only when the next snapshot goes out after the cut; after the timeout, the child also gets `ETIMEDOUT` only at its next `write()`.
 
-## 6. 設計取捨與限制
+## 6. Design Trade-offs and Limitations
 
-| 決定 | 好處 | 代價 |
+| Decision | Benefit | Cost |
 |---|---|---|
-| 每條連線 fork 一個 child | 隔離性好，一個 child 當掉不影響其他連線；程式簡單 | 每條連線一個程序，比 thread 耗資源，所以用 `-m` 限制數量（預設 32） |
-| 兩個 3 秒的期限（[2b]、[4]） | 斷線和慢速的 client 很快就被放掉，名額回得來 | 網路很差的正常 client（例如斷線超過 3 秒）也會被切斷；要調長得改 `server.c` 的常數再重新編譯 |
-| 請求和回應用一行純文字 | 抓包時直接讀得懂，用 `telnet` 或 `nc` 也能測 | 傳數字比二進位格式多幾個 bytes |
-| 一條連線只處理一個請求 | child 的流程單純，處理完就結束 | 每次查詢都要重新做三向交握 |
-| signal handler 只記錄，log 由主迴圈印 | 避免在 handler 裡呼叫不安全的 `printf()` | 回收紀錄可能延後到下一次 `accept()` 返回才印出 |
+| Fork one child per connection | Good isolation: one child crashing does not affect the other connections; the code is simple | One process per connection uses more resources than a thread, so `-m` limits the number (default 32) |
+| Two 3-second deadlines ([2b], [4]) | Disconnected and slow clients are dropped quickly, so their slots come back | A normal client on a very bad network (for example one cut off for more than 3 seconds) is cut off too; making them longer means changing the constants in `server.c` and recompiling |
+| Requests and replies are one line of plain text | They can be read directly in a packet capture and tested with `telnet` or `nc` | Numbers sent as text take a few more bytes than a binary format |
+| One request per connection | The child's flow is simple: it ends as soon as it is done | Every query needs a new three-way handshake |
+| The signal handler only records; the main loop prints the log | Avoids calling the unsafe `printf()` inside a handler | A reap record may not be printed until the next time `accept()` returns |
 
-**其他限制：**
+**Other limitations:**
 
-- 只支援 Linux 與 IPv4。
-- 沒有加密與身分驗證，連得上 server 的人都能讀到系統資訊。
-- 合法的長請求可以佔滿名額：32 個 `WATCH 100 10000` 會讓其他 client 收到 `ERROR server busy` 約 16.5 分鐘。這種請求也比 [5b] 等待的 30 秒長，按 `Ctrl+C` 後會被切斷。可以再加的保護：限制同一個 IP 同時的連線數，或限制每個請求的總時間（(count − 1) × ms）。
-- `fork()` 失敗時，parent 只記錄錯誤並關閉連線，client 收不到任何回覆（client 以 exit 2 結束）。
-- client 沒有逾時：server 不回覆也不關閉連線時，client 會一直等到使用者按 `Ctrl+C`。
-- 3 秒（[2b]、[4]）、30 秒（[5b]）和 `WATCH` 的範圍都是寫在程式裡的常數，沒有命令列參數可以調整。
+- Linux and IPv4 only.
+- No encryption or authentication; anyone who can reach the server can read the system information.
+- Valid long requests can fill every slot: 32 `WATCH 100 10000` requests make other clients get `ERROR server busy` for about 16.5 minutes. Such a request also lasts longer than the 30 seconds [5b] waits, so it is cut off after `Ctrl+C`. Further protection could limit the number of simultaneous connections from one IP, or the total time of each request ((count − 1) × ms).
+- When `fork()` fails, the parent only logs the error and closes the connection, and the client receives no reply at all (the client exits with code 2).
+- The client has no timeout: if the server neither replies nor closes the connection, the client waits until the user presses `Ctrl+C`.
+- The 3 seconds ([2b], [4]), the 30 seconds ([5b]) and the `WATCH` ranges are constants in the code; no command-line flag can change them.
