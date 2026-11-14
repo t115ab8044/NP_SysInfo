@@ -1,99 +1,99 @@
-# NP SysInfo：Fork 多進程系統資訊伺服器
+# NP SysInfo: A Fork-Based Multi-Process System Information Server
 
-C 語言網路與系統程式設計期中專案。
+Midterm project for C network and system programming.
 
-**學號：** 115ab8044 ・ **姓名：** 顏祺宸
+**Student ID:** 115ab8044 · **Name:** 顏祺宸
 
-Client 連到 server，用一行文字請求查詢主機的即時系統資訊：hostname、uptime、CPU load average、可用記憶體與進程數。可以查一次，也可以要求 server 每隔一段時間連續回報。Server 為每個連線 `fork()` 一個子進程處理，雙方共用的工具函式封裝在動態函式庫 `libutils.so`。
+A client connects to the server and sends a one-line text request for live system information about the host: hostname, uptime, CPU load average, available memory and number of processes. It can ask once, or ask the server to keep reporting at a fixed interval. The server `fork()`s a child process for each connection, and the helper functions shared by both sides are packaged in the shared library `libutils.so`.
 
-**應用情境：** 管理多台 Linux 主機時，常需要快速知道每台主機的負載和記憶體狀況。主機上跑 `server`，其他人不用登入主機，就能用 `client` 查詢一次，或連續觀察幾秒鐘的變化。
+**Use case:** When you manage several Linux hosts, you often need a quick look at each host's load and memory. With `server` running on a host, other people can use `client` to query it once, or watch it change over a few seconds, without logging in to the host.
 
-## 繳交內容導覽
+## Submission Guide
 
-| 項目 | 位置 |
+| Item | Location |
 |---|---|
-| System design explanation（系統設計說明） | [docs/system-design.md](docs/system-design.md) |
-| Description of key source code（關鍵原始碼說明） | [docs/key-source.md](docs/key-source.md) |
-| Execution screenshots（執行截圖） | [docs/screenshots.md](docs/screenshots.md) |
-| Complete source code（完整原始碼） | 本 repo，檔案清單見[第 1 節](#1-專案架構) |
-| Real Test（真實測試） | [第 7 節](#7-real-testwindows--wsl2)：Windows client 連到 WSL2 上的 server |
-| Auditing discussion（稽核討論） | [docs/audit.md](docs/audit.md) |
+| System design explanation | [docs/system-design.md](docs/system-design.md) |
+| Description of key source code | [docs/key-source.md](docs/key-source.md) |
+| Execution screenshots | [docs/screenshots.md](docs/screenshots.md) |
+| Complete source code | This repo; the file list is in [Section 1](#1-project-structure) |
+| Real Test | [Section 7](#7-real-test-windows--wsl2): a Windows client connects to the server in WSL2 |
+| Auditing discussion | [docs/audit.md](docs/audit.md) |
 
-## 需求對照
+## Requirements Mapping
 
-| 期中規定 | 本專案的做法 |
+| Midterm requirement | How this project meets it |
 |---|---|
-| Server 用 `fork()` 處理連線，不可用 thread | parent 只負責 `accept()`，每個連線 fork 一個 child；整個專案沒有使用 thread |
-| 至少同時處理 10 個 client，並提供執行期證明 | `tests/test_concurrent.c` 讓 12 個 client 同時連線，用 `ps aux` 和 `ps --forest` 證明 12 個子進程同時存在 |
-| 封包擷取與分析 | `tests/test_capture.c` 用 tcpdump 抓 loopback，讀回 pcap 檔，逐包列出三向交握、請求、回應、FIN，並把請求封包拆成 Ethernet、IPv4、TCP 標頭逐欄說明 |
-| 雙層 Debug | 編譯期 `-DENABLE_DEBUG`（關閉時巨集展開成 `((void)0)`），加上執行期 `-d 0/1/2` |
-| 共用函式封裝成 `.so`，兩邊都連結 | logger、`write_all`／`read_line`、系統資訊擷取都在 `libutils.so`，server 和 client 都以 `-lutils` 動態連結 |
-| Client 向 server 請求系統資訊 | `SYSINFO` 查一次，`WATCH <次數> <毫秒>` 連續回報 |
-| 穩健機制，至少 3 個 With/Without 執行範例 | 5 個機制、5 組 With/Without 對照（[第 5 節](#5-五個穩健機制)），每個機制都能用參數關閉，由 `tests/test_robustness.c` 自動跑出對照 |
-| 使用 Makefile 建置 | `Makefile` 提供建置、展示與測試的 target |
+| The server handles connections with `fork()`; no threads | The parent only `accept()`s and forks one child per connection; the project uses no threads anywhere |
+| At least 10 concurrent clients, with runtime proof | `tests/test_concurrent.c` connects 12 clients at once, and `ps aux` and `ps --forest` show 12 child processes alive at the same time |
+| Packet capture and analysis | `tests/test_capture.c` captures loopback traffic with tcpdump, reads the pcap file back, lists the three-way handshake, request, reply and FIN packet by packet, and breaks the request packet into its Ethernet, IPv4 and TCP headers, field by field |
+| Two-level debug | Compile time `-DENABLE_DEBUG` (when it is off, the macros expand to `((void)0)`), plus runtime `-d 0/1/2` |
+| Shared functions in a `.so`, linked by both sides | The logger, `write_all`/`read_line` and the system information helpers are in `libutils.so`; the server and the client both link it dynamically with `-lutils` |
+| The client requests system information from the server | `SYSINFO` asks once, `WATCH <count> <ms>` keeps reporting |
+| Robustness mechanisms, at least 3 With/Without examples | 5 mechanisms and 5 With/Without comparisons ([Section 5](#5-five-robustness-mechanisms)); each mechanism can be turned off with a flag, and `tests/test_robustness.c` runs the comparisons automatically |
+| Built with a Makefile | The `Makefile` has targets for building, the demo and the tests |
 
 ---
 
-## 1. 專案架構
+## 1. Project Structure
 
-### 檔案結構
+### File layout
 
 ```text
 .
-├── Makefile             建置 libutils.so、server、client，以及測試 target
-├── utils.h / utils.c    libutils.so：logger、socket I/O、系統資訊、雜項工具
-├── server.c             fork 多進程 server，5 個穩健機制可個別關閉
-├── client.c             client：查詢、連續回報、3 種故障模擬
-├── tests/               C 測試程式
-│   ├── testlib.h / testlib.c   共用函式：fork + exec、regex 過濾、讀取 /proc
-│   ├── demo.c                  一個指令的現場展示（約 3 秒）
-│   ├── test_concurrent.c       12 個 client 併發證明
-│   ├── test_robustness.c       5 組穩健機制的 With/Without 對照
-│   ├── test_debug.c            雙層 Debug 證明（編譯期與執行期）
-│   ├── test_capture.c          tcpdump 抓包與標頭分析
-│   └── win_client.c            Real Test 用的 Windows client（Winsock）
-├── docs/                系統設計、關鍵原始碼說明、執行截圖與稽核討論
-└── logs/                測試結果與抓包檔（重跑測試會產生細項 log）
+├── Makefile             builds libutils.so, server and client, plus the test targets
+├── utils.h / utils.c    libutils.so: logger, socket I/O, system information, misc helpers
+├── server.c             fork-based multi-process server; each of the 5 robustness mechanisms can be turned off
+├── client.c             client: one query, repeated reports, 3 failure simulations
+├── tests/               test programs in C
+│   ├── testlib.h / testlib.c   shared helpers: fork + exec, regex filtering, reading /proc
+│   ├── demo.c                  one-command live demo (about 3 s)
+│   ├── test_concurrent.c       proof of 12 concurrent clients
+│   ├── test_robustness.c       With/Without comparisons for the 5 robustness mechanisms
+│   ├── test_debug.c            proof of two-level debug (compile time and runtime)
+│   ├── test_capture.c          tcpdump capture and header analysis
+│   └── win_client.c            Windows client for the Real Test (Winsock)
+├── docs/                system design, key source code, execution screenshots and auditing discussion
+└── logs/                test results and capture files (rerunning the tests writes the detailed logs)
 ```
 
-### 進程模型
+### Process model
 
 ```text
- client 1..N ── connect() ──────► server parent   accept → 檢查上限 → fork()
+ client 1..N ── connect() ──────► server parent   accept → check the limit → fork()
                                     │      ▲
-                             fork() │      │ SIGCHLD：child 結束時 kernel 通知，
-                                    ▼      │ parent 用 waitpid 迴圈回收
- client 1 ◄═══ request/reply ═══► child (pid A)   服務 client 1，完成後 _exit
- client 2 ◄═════════════════════► child (pid B)   服務 client 2，完成後 _exit
+                             fork() │      │ SIGCHLD: the kernel tells the parent a child ended,
+                                    ▼      │ and the parent reaps it in a waitpid loop
+ client 1 ◄═══ request/reply ═══► child (pid A)   serves client 1, then _exit
+ client 2 ◄═════════════════════► child (pid B)   serves client 2, then _exit
    ...                            ...
  client N ◄═════════════════════► child (pid N)
 ```
 
-- **parent：** 只負責 `accept()`、`fork()` 和回收子進程。唯一會寫入 client 的情況，是連線數達上限時直接回 `ERROR server busy`（機制 [4]）。
-- **child：** 讀一行請求、回覆、`_exit()`。連線建立後，請求和回覆直接在 client 和 child 之間傳送，不經過 parent。exit code 代表結束原因，parent 回收時寫進 log。
+- **parent:** Only `accept()`s, `fork()`s and reaps children. The only time it writes to a client is when the connection limit is reached and it replies `ERROR server busy` directly (mechanism [4]).
+- **child:** Reads one request line, replies, and calls `_exit()`. Once the connection is set up, requests and replies go directly between the client and the child, not through the parent. The exit code gives the reason the child ended, and the parent writes it to the log when it reaps the child.
 
-### libutils.so 模組
+### libutils.so modules
 
-| 模組 | 函式 | 說明 |
+| Module | Functions | Description |
 |---|---|---|
-| Logger | `log_init`、`log_write`、`log_hexdump`、`LOG_INFO/WARN/ERROR`、`LOG_DEBUG`、`LOG_HEXDUMP`、`g_runtime_debug_level` | 每行格式為 `HH:MM:SS.mmm [tag:pid] LEVEL msg`，整行只用一次 `write()` 輸出，多個進程同時寫也不會交錯 |
-| Socket I/O | `write_all`、`read_line` | `write_all` 補完 short write、遇到 `EINTR` 重試；`read_line` 一次讀 1 byte，最多讀 127 bytes（機制 [3]） |
-| 系統資訊 | `sysinfo_collect`、`sysinfo_format` | 資料來源是 `gethostname`、`sysinfo(2)`、`getloadavg`、`/proc/meminfo`，格式化成一行 `OK ...` |
-| 其他 | `parse_int_range`、`sleep_ms`、`set_signal` | 命令列整數解析、被 signal 中斷後會繼續睡的 sleep、用 `sigaction` 設定 signal |
+| Logger | `log_init`, `log_write`, `log_hexdump`, `LOG_INFO/WARN/ERROR`, `LOG_DEBUG`, `LOG_HEXDUMP`, `g_runtime_debug_level` | Each line has the format `HH:MM:SS.mmm [tag:pid] LEVEL msg` and is written with a single `write()`, so lines from several processes writing at once never interleave |
+| Socket I/O | `write_all`, `read_line` | `write_all` finishes short writes and retries on `EINTR`; `read_line` reads 1 byte at a time, at most 127 bytes (mechanism [3]) |
+| System information | `sysinfo_collect`, `sysinfo_format` | The data comes from `gethostname`, `sysinfo(2)`, `getloadavg` and `/proc/meminfo`, and is formatted as one `OK ...` line |
+| Misc | `parse_int_range`, `sleep_ms`, `set_signal` | Command-line integer parsing, a sleep that keeps sleeping after a signal interrupts it, and setting signal handlers with `sigaction` |
 
-`libutils.so` 共匯出 11 個符號，可用 `make inspect` 查看。
+`libutils.so` exports 11 symbols in total; `make inspect` lists them.
 
 ---
 
-## 2. 建置
+## 2. Build
 
-**需求：** Linux（本專案在 WSL2 Ubuntu 上測試）、gcc、GNU make。測試程式另外會用到 `ps`、`strings`、`objdump`、`size`、`tcpdump`。
+**Requirements:** Linux (this project is tested on WSL2 Ubuntu), gcc and GNU make. The test programs also use `ps`, `strings`, `objdump`, `size` and `tcpdump`.
 
 ```bash
 make
 ```
 
-`make` 預設編出 debug 版（帶 `-DENABLE_DEBUG`），實際的編譯指令如下。debug 和 release 兩種模式都是 **0 warning**（`-Wall -Wextra -pedantic`）。
+By default `make` builds the debug version (with `-DENABLE_DEBUG`); the actual compile commands are below. Both the debug and the release build have **0 warnings** (`-Wall -Wextra -pedantic`).
 
 ```text
 gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -DENABLE_DEBUG -fPIC -shared -o libutils.so utils.c
@@ -101,105 +101,105 @@ gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -DENABLE_DEBUG -o server server.c 
 gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -DENABLE_DEBUG -o client client.c -L. -Wl,-rpath,'$ORIGIN' -lutils
 ```
 
-| Make target | 作用 |
+| Make target | What it does |
 |---|---|
-| `make`、`make all` | debug 版（`DEBUG=1`，預設） |
-| `make release` | release 版（`DEBUG=0`，`LOG_DEBUG` 完全編譯掉） |
-| `make demo` | 一個指令的現場展示（約 3 秒）：`.so` 連結、查詢、12 個併發子進程、拒絕錯誤請求、沒有殭屍進程 |
-| `make test` | 依序執行 `test_concurrent`、`test_robustness`、`test_debug` |
-| `make test-concurrent`、`make test-robust`、`make test-debug` | 個別執行一支測試 |
-| `make test-capture` | tcpdump 抓包測試，需要 root 或 sudo |
-| `make inspect` | 列出 `libutils.so` 匯出的符號，以及 `ldd` 連結結果 |
-| `make capture` | 用 `sudo tcpdump -i lo -n -x` 即時顯示 port 9090 的流量 |
-| `make win-client` | 用 mingw-w64 編出 Real Test 用的 `win_client.exe`（[第 7 節](#7-real-testwindows--wsl2)） |
-| `make clean` | 刪除 `.so`、執行檔與測試程式 |
+| `make`, `make all` | Debug build (`DEBUG=1`, the default) |
+| `make release` | Release build (`DEBUG=0`; `LOG_DEBUG` is compiled out completely) |
+| `make demo` | One-command live demo (about 3 s): `.so` linking, a query, 12 concurrent child processes, a rejected bad request, no zombie processes |
+| `make test` | Runs `test_concurrent`, `test_robustness` and `test_debug` in order |
+| `make test-concurrent`, `make test-robust`, `make test-debug` | Run one test each |
+| `make test-capture` | tcpdump capture test; needs root or sudo |
+| `make inspect` | Lists the symbols `libutils.so` exports and the `ldd` linking result |
+| `make capture` | Shows port 9090 traffic live with `sudo tcpdump -i lo -n -x` |
+| `make win-client` | Builds `win_client.exe` for the Real Test with mingw-w64 ([Section 7](#7-real-test-windows--wsl2)) |
+| `make clean` | Deletes the `.so`, the executables and the test programs |
 
-- **切換 DEBUG 會自動全部重編。** Makefile 把 CFLAGS 記錄在 `.build_flags`，`DEBUG=1` 和 `DEBUG=0` 互換時，`.so` 和兩個執行檔會一起重編。
-- **函式庫跟著執行檔走。** `-Wl,-rpath,'$ORIGIN'` 讓執行檔載入同一個資料夾裡的 `libutils.so`，從任何目錄啟動都可以。
+- **Switching DEBUG rebuilds everything.** The Makefile records the CFLAGS in `.build_flags`, so when you switch between `DEBUG=1` and `DEBUG=0`, the `.so` and both executables are rebuilt together.
+- **The library travels with the executables.** `-Wl,-rpath,'$ORIGIN'` makes the executables load the `libutils.so` in their own folder, so they can be started from any directory.
 
 ---
 
-## 3. 使用方式
+## 3. Usage
 
-### 3.1 請求與回應
+### 3.1 Requests and replies
 
-Client 送出一行文字，server 回覆一行或多行文字，每行以 `\n` 結尾，一條連線只處理一個請求。
+The client sends one line of text and the server replies with one or more lines of text; every line ends with `\n`. Each connection handles only one request.
 
-| Client 送出 | Server 回覆 |
+| Client sends | Server replies |
 |---|---|
-| `SYSINFO` | 一行 `OK seq=1 ...`，然後關閉連線 |
-| `WATCH <count> <ms>` | 每隔 `<ms>` 毫秒一行，共 `<count>` 行（count 1–100，ms 100–10000） |
-| 其他內容、參數超出範圍、超過 127 bytes | 一行 `ERROR <原因>`，然後關閉連線 |
+| `SYSINFO` | One line `OK seq=1 ...`, then closes the connection |
+| `WATCH <count> <ms>` | One line every `<ms>` milliseconds, `<count>` lines in total (count 1–100, ms 100–10000) |
+| Anything else, arguments out of range, more than 127 bytes | One line `ERROR <reason>`, then closes the connection |
 
 ```text
 OK seq=1 pid=556 host=LAPTOP-0F0NVT4H up=0d 00:00:30 load=0.11/0.03/0.01 mem_avail=7.09/7.61 GiB procs=231
 ```
 
-`pid=` 是負責這條連線的 server 子進程 PID，所以 client 的輸出本身就能證明每條連線由不同的進程處理。
+`pid=` is the PID of the server child that handles this connection, so the client's output by itself shows that each connection is handled by a different process.
 
 ### 3.2 Server
 
 ```bash
-./server                    # 監聽 0.0.0.0:9090，5 個機制全開
-./server -p 9000 -d 1       # 改用 port 9000，開啟流程 debug
-./server --no-sigchld       # 關閉機制 [1]，示範殭屍進程
+./server                    # listen on 0.0.0.0:9090 with all 5 mechanisms on
+./server -p 9000 -d 1       # use port 9000 and turn on flow debug
+./server --no-sigchld       # turn off mechanism [1] to show zombie processes
 ```
 
-| 參數 | 說明 |
+| Option | Description |
 |---|---|
-| `-p, --port PORT` | 監聽的 port（預設 9090） |
-| `-d, --debug LEVEL` | 執行期 debug 等級：0 一般訊息，1 加上流程，2 再加上 hex dump |
-| `-m, --max-clients N` | 機制 [4]：同時服務的 client 上限（預設 32） |
-| `--no-sigchld`、`--no-sigpipe`、`--no-validate`、`--no-limit`、`--no-pdeathsig` | 分別關閉機制 [1]～[5]，用於 With/Without 對照 |
+| `-p, --port PORT` | Port to listen on (default 9090) |
+| `-d, --debug LEVEL` | Runtime debug level: 0 normal messages, 1 adds the flow, 2 also adds hex dumps |
+| `-m, --max-clients N` | Mechanism [4]: maximum number of clients served at once (default 32) |
+| `--no-sigchld`, `--no-sigpipe`, `--no-validate`, `--no-limit`, `--no-pdeathsig` | Turn off mechanisms [1] to [5] respectively, for the With/Without comparisons |
 
-子進程的 exit code 由 parent 回收時記錄，例如 `reaped child 795: exit 3 (client left)`：
+The parent records each child's exit code when it reaps the child, for example `reaped child 795: exit 3 (client left)`:
 
-| exit code | 意義 |
+| exit code | Meaning |
 |---|---|
-| 0 | 請求處理完成 |
-| 1 | I/O 錯誤 |
-| 2 | 請求被拒絕（太長、未知的指令、參數錯誤） |
-| 3 | client 已經離開（寫入時收到 `EPIPE`，或還沒送完請求就斷線） |
+| 0 | Request served |
+| 1 | I/O error |
+| 2 | Request rejected (too long, unknown command, bad arguments) |
+| 3 | The client has left (`EPIPE` on a write, or it disconnected before sending a complete request) |
 
-子進程如果是被 signal 殺掉的，log 會顯示 `killed by signal 13 (Broken pipe)`。
+If a child is killed by a signal, the log shows `killed by signal 13 (Broken pipe)`.
 
 ### 3.3 Client
 
 ```bash
-./client                      # SYSINFO：查詢一次
-./client -n 5 -w 1000         # WATCH 5 1000：每秒一行，共 5 行
-./client -r HELLO             # 送出任意一行，觀察 ERROR 回覆
-./client --mode abort         # 故障模擬，見下表
+./client                      # SYSINFO: query once
+./client -n 5 -w 1000         # WATCH 5 1000: one line per second, 5 lines
+./client -r HELLO             # send any line and see the ERROR reply
+./client --mode abort         # failure simulation, see the table below
 ```
 
-| 參數 | 說明 |
+| Option | Description |
 |---|---|
-| `-H, --host HOST` | server 位址（預設 127.0.0.1） |
-| `-p, --port PORT` | server port（預設 9090） |
-| `-d, --debug LEVEL` | 執行期 debug 等級 0/1/2 |
-| `-n, --count N`、`-w, --interval MS` | 改送 `WATCH N MS`（預設 5 次、1000 ms） |
-| `-r, --request LINE` | 把 LINE 當成請求送出 |
-| `--mode MODE` | 故障模擬，見下表 |
-| `--mib N` | `longline` 模式送出的資料量（預設 16 MiB） |
+| `-H, --host HOST` | Server address (default 127.0.0.1) |
+| `-p, --port PORT` | Server port (default 9090) |
+| `-d, --debug LEVEL` | Runtime debug level 0/1/2 |
+| `-n, --count N`, `-w, --interval MS` | Send `WATCH N MS` instead (default 5 times, 1000 ms) |
+| `-r, --request LINE` | Send LINE as the request |
+| `--mode MODE` | Failure simulation, see the table below |
+| `--mib N` | Amount of data the `longline` mode sends (default 16 MiB) |
 
-| 故障模式 | 行為 | 用來測試 |
+| Failure mode | Behavior | Used to test |
 |---|---|---|
-| `abort` | 送出 `WATCH 10 200`，收到第 1 行就斷線 | 機制 [2]：SIGPIPE |
-| `longline` | 送出 16 MiB 都不換行的請求，然後等 server 回應 | 機制 [3]：請求長度上限 |
-| `idle` | 連上後什麼都不送，一直佔住連線 | 機制 [4]：連線上限 |
+| `abort` | Sends `WATCH 10 200` and disconnects as soon as it receives the first line | Mechanism [2]: SIGPIPE |
+| `longline` | Sends a 16 MiB request with no newline, then waits for the server's reply | Mechanism [3]: request length limit |
+| `idle` | Connects and sends nothing, holding the connection | Mechanism [4]: connection limit |
 
-Client 沒有逾時，會一直等到 server 回覆或關閉連線；要提早結束就按 `Ctrl+C`。測試程式會自己結束 `longline` 和 `idle` 的 client。
+The client has no timeout: it waits until the server replies or closes the connection. Press `Ctrl+C` to stop it early. The test programs end the `longline` and `idle` clients themselves.
 
-Client 的 exit code：0 成功，1 失敗或收到 `ERROR`，2 連線在收到任何回覆前就結束。
+Client exit codes: 0 success, 1 failure or an `ERROR` reply, 2 the connection ended before any reply arrived.
 
 ---
 
-## 4. 雙層 Debug 控制
+## 4. Two-Level Debug Control
 
-| 層級 | 控制方式 | 效果 |
+| Level | How it is controlled | Effect |
 |---|---|---|
-| 編譯期 | `make`（帶 `-DENABLE_DEBUG`）或 `make release` | 關閉時 `LOG_DEBUG`、`LOG_HEXDUMP` 展開成 `((void)0)`：沒有程式碼、沒有格式字串，也沒有等級判斷 |
-| 執行期 | `-d 0/1/2`，設定 `g_runtime_debug_level` | 0：只有 INFO、WARN、ERROR<br>1：加上 DEBUG 流程訊息（附 `file:line`）<br>2：再加上每個請求與回覆的 hex dump |
+| Compile time | `make` (with `-DENABLE_DEBUG`) or `make release` | When it is off, `LOG_DEBUG` and `LOG_HEXDUMP` expand to `((void)0)`: no code, no format strings and no level check |
+| Runtime | `-d 0/1/2`, which sets `g_runtime_debug_level` | 0: only INFO, WARN and ERROR<br>1: adds DEBUG flow messages (with `file:line`)<br>2: also adds a hex dump of every request and reply |
 
 ```c
 #ifdef ENABLE_DEBUG
@@ -213,7 +213,7 @@ Client 的 exit code：0 成功，1 失敗或收到 `ERROR`，2 連線在收到�
 #endif
 ```
 
-release 版仍可接受 `-d`，但會警告 `built without -DENABLE_DEBUG: -d 2 has no effect`。`-d 2` 時 client 端看到的請求：
+The release build still accepts `-d`, but warns `built without -DENABLE_DEBUG: -d 2 has no effect`. The request as the client sees it with `-d 2`:
 
 ```text
 DEBUG request: 8 byte(s)
@@ -222,128 +222,128 @@ DEBUG     0000  53 59 53 49 4e 46 4f 0a                           |SYSINFO.|
 
 ---
 
-## 5. 五個穩健機制
+## 5. Five Robustness Mechanisms
 
-每個機制都可以用參數單獨關閉，由 `tests/test_robustness.c` 自動跑 Without 和 With 兩種情況並比較。
+Each mechanism can be turned off on its own with a flag, and `tests/test_robustness.c` automatically runs both the Without and the With case and compares them.
 
-| # | 異常情況 | 機制 | 關閉參數 |
+| # | Failure | Mechanism | Flag to turn it off |
 |---|---|---|---|
-| [1] | 子進程結束後沒人回收，變成殭屍 | SIGCHLD handler 內以迴圈呼叫 `waitpid(WNOHANG)` | `--no-sigchld` |
-| [2] | 寫入已經離開的 client，子進程被 SIGPIPE 殺掉 | 忽略 SIGPIPE，處理 `write()` 回傳的 `EPIPE` | `--no-sigpipe` |
-| [3] | 不換行的超長請求讓子進程記憶體一直長大 | 請求最多 127 bytes，超過就回 `ERROR request too long` | `--no-validate` |
-| [4] | 大量連線讓 server 產生無限多個子進程 | 同時服務的 client 上限，超過時 parent 直接回 `ERROR server busy`、不 fork | `--no-limit` |
-| [5] | parent 被 `kill -9` 後，子進程變成孤兒繼續執行 | `prctl(PR_SET_PDEATHSIG, SIGTERM)` | `--no-pdeathsig` |
+| [1] | A finished child is never reaped and becomes a zombie | SIGCHLD handler that calls `waitpid(WNOHANG)` in a loop | `--no-sigchld` |
+| [2] | Writing to a client that has left kills the child with SIGPIPE | Ignore SIGPIPE and handle the `EPIPE` that `write()` returns | `--no-sigpipe` |
+| [3] | An oversized request with no newline makes the child's memory keep growing | Requests are capped at 127 bytes; longer ones get `ERROR request too long` | `--no-validate` |
+| [4] | A flood of connections makes the server create unlimited child processes | A cap on the clients served at once; above it the parent replies `ERROR server busy` itself and does not fork | `--no-limit` |
+| [5] | After the parent gets `kill -9`, its children become orphans and keep running | `prctl(PR_SET_PDEATHSIG, SIGTERM)` | `--no-pdeathsig` |
 
-[1] 和 [5] 剛好是一組：殭屍是「child 死了、parent 沒收」，孤兒是「parent 死了、child 還在」。
+[1] and [5] form a pair: a zombie is "the child died and the parent never collected it", an orphan is "the parent died and the child is still running".
 
-### [1] SIGCHLD + `waitpid` 迴圈
+### [1] SIGCHLD + a `waitpid` loop
 
-- **問題：** 子進程結束後，如果 parent 不呼叫 `wait`，它會一直以 `<defunct>` 狀態佔用 process table。
-- **作法：** 用 `sigaction` 註冊 SIGCHLD handler，在 handler 裡以 `while (waitpid(-1, &status, WNOHANG) > 0)` 回收。signal 不會排隊，多個子進程同時結束可能只收到一次 SIGCHLD，所以一定要用迴圈。handler 只把 PID 和 status 存進 ring buffer，log 由 main loop 輸出，因為 `printf()` 不能在 signal handler 裡使用。
-- **關閉後：** SIGCHLD 維持預設動作，結束的子進程全部變成殭屍。
+- **Problem:** If the parent never calls `wait` after a child ends, the child keeps its slot in the process table in the `<defunct>` state.
+- **Solution:** Register a SIGCHLD handler with `sigaction` and reap in it with `while (waitpid(-1, &status, WNOHANG) > 0)`. Signals do not queue: when several children end at the same time there may be only one SIGCHLD, so the loop is required. The handler only stores the PID and status in a ring buffer and the main loop writes the log, because `printf()` must not be used in a signal handler.
+- **When turned off:** SIGCHLD keeps its default action, and every finished child becomes a zombie.
 
-### [2] 忽略 SIGPIPE
+### [2] Ignoring SIGPIPE
 
-- **問題：** 對已經關閉的連線呼叫 `write()` 會觸發 SIGPIPE，預設動作是直接終止進程，沒有任何錯誤處理。
-- **作法：** parent 啟動時設定 `SIGPIPE` 為 `SIG_IGN`，子進程透過 `fork()` 繼承。之後 `write()` 改成回傳 -1、errno 為 `EPIPE`，子進程記錄 `client left` 後以 exit 3 結束。
-- **關閉後：** 子進程被 signal 13 殺掉。不論開或關，parent 都不受影響，能繼續服務新的 client。
+- **Problem:** Calling `write()` on a connection that has been closed raises SIGPIPE, whose default action terminates the process at once, without any error handling.
+- **Solution:** At startup the parent sets `SIGPIPE` to `SIG_IGN`, and the children inherit it through `fork()`. `write()` then returns -1 with errno `EPIPE` instead; the child logs `client left` and exits with code 3.
+- **When turned off:** The child is killed by signal 13. Either way the parent is unaffected and keeps serving new clients.
 
-### [3] 請求長度上限
+### [3] Request length limit
 
-- **問題：** 如果 server 一直讀到 `\n` 為止，client 只要不送換行，就能讓子進程的緩衝區無限長大。
-- **作法：** `read_line()` 一次讀 1 byte，讀滿 127 bytes 還沒看到 `\n` 就停止，回覆 `ERROR request too long` 並結束。
-- **關閉後：** 改用不限長度的讀法，緩衝區每次加倍。16 MiB 的請求讓緩衝區長到 32 MiB，子進程的 RSS 約 17 MiB。
+- **Problem:** If the server keeps reading until it sees `\n`, a client that never sends a newline can make the child's buffer grow without limit.
+- **Solution:** `read_line()` reads 1 byte at a time and stops once it has read 127 bytes without seeing `\n`; the child replies `ERROR request too long` and ends.
+- **When turned off:** An unlimited read is used instead, which doubles the buffer each time. A 16 MiB request grows the buffer to 32 MiB, and the child's RSS reaches about 17 MiB.
 
-### [4] 連線上限
+### [4] Connection limit
 
-- **問題：** 每個連線都 fork，代表只要大量連線，就能讓 server 產生無限多個進程。連上後不送資料的 client 也會一直佔著子進程。
-- **作法：** parent 記錄還沒回收的子進程數量。達到上限（`-m`，預設 32）時，parent 用 `send(..., MSG_DONTWAIT | MSG_NOSIGNAL)` 直接回 `ERROR server busy` 後關閉，不 fork。這兩個 flag 讓 parent 不會因為 client 而卡住或被 SIGPIPE 殺掉。
-- **關閉後：** 10 個閒置的 client 佔住 10 個子進程。
+- **Problem:** Forking for every connection means that a flood of connections can make the server create unlimited processes. A client that connects and sends nothing also holds a child the whole time.
+- **Solution:** The parent counts the children it has not reaped yet. At the limit (`-m`, default 32), the parent replies `ERROR server busy` itself with `send(..., MSG_DONTWAIT | MSG_NOSIGNAL)`, closes the connection and does not fork. The two flags keep the parent from blocking on a client or being killed by SIGPIPE.
+- **When turned off:** 10 idle clients hold 10 child processes.
 
-### [5] 子進程跟著 parent 結束
+### [5] Child processes exit along with the parent
 
-- **問題：** `SIGKILL` 無法攔截，parent 被 `kill -9` 時來不及通知子進程。子進程會被過繼給其他進程（WSL2 上是該 session 的 `/init`，不一定是 PID 1），繼續執行，沒有人管理。
-- **作法：** 子進程在 fork 後呼叫 `prctl(PR_SET_PDEATHSIG, SIGTERM)`，parent 一死，kernel 就送 `SIGTERM` 給它。設定後再檢查一次 `getppid()`，處理 parent 在 fork 和 `prctl` 之間就死掉的情況。
-- **關閉後：** 子進程的 PPID 從 parent 變成別的進程（log 中從 1903 變成 1632），繼續把 10 筆資料送完。
+- **Problem:** `SIGKILL` cannot be caught, so a parent that gets `kill -9` has no chance to tell its children. The children are adopted by another process (on WSL2, that session's `/init`, not necessarily PID 1) and keep running with nobody managing them.
+- **Solution:** After the fork, the child calls `prctl(PR_SET_PDEATHSIG, SIGTERM)`, so the kernel sends it `SIGTERM` as soon as the parent dies. It then checks `getppid()` once more, to handle a parent that died between the fork and `prctl`.
+- **When turned off:** The child's PPID changes from the parent to another process (from 1903 to 1632 in the log), and the child goes on to send all 10 snapshots.
 
 ---
 
-## 6. 測試程式
+## 6. Tests
 
-測試程式都是 C 寫的，透過 `fork` + `exec` 執行，不經過 shell。它們會自行啟動 server，每項檢查印出 `[PASS]` 或 `[FAIL]`，全部通過時以 exit code 0 結束，完整輸出存在 `logs/`。可用環境變數 `PORT` 改 port。
+The test programs are all written in C and run other programs with `fork` + `exec`, without going through a shell. They start the server themselves, print `[PASS]` or `[FAIL]` for every check, exit with code 0 when all checks pass, and save their full output in `logs/`. The environment variable `PORT` changes the port.
 
-| 測試程式 | 證明內容 | 執行方式 | 結果 |
+| Test | What it proves | How to run | Result |
 |---|---|---|---|
-| `tests/test_concurrent.c` | 12 個 client 同時連線，每條連線由不同的子進程處理 | `make test-concurrent` | 9/9 PASS |
-| `tests/test_robustness.c` | 5 個穩健機制的 With/Without 對照 | `make test-robust` | 11/11 PASS |
-| `tests/test_debug.c` | 編譯期與執行期的雙層 Debug | `make test-debug` | 15/15 PASS |
-| `tests/test_capture.c` | tcpdump 抓包、三向交握、標頭欄位 | `make test-capture`（需要 root 或 sudo） | 10/10 PASS |
+| `tests/test_concurrent.c` | 12 clients connect at the same time, and each connection is handled by a different child | `make test-concurrent` | 9/9 PASS |
+| `tests/test_robustness.c` | With/Without comparisons for the 5 robustness mechanisms | `make test-robust` | 11/11 PASS |
+| `tests/test_debug.c` | Two-level debug at compile time and runtime | `make test-debug` | 15/15 PASS |
+| `tests/test_capture.c` | tcpdump capture, three-way handshake, header fields | `make test-capture` (needs root or sudo) | 10/10 PASS |
 
-### 6.1 test_concurrent：12 個 client 併發
+### 6.1 test_concurrent: 12 concurrent clients
 
-12 個 client 同時送出 `WATCH 6 500`，每條連線約維持 3 秒。測試程式在這段時間內拍下 `ps aux` 和進程樹：
+12 clients send `WATCH 6 500` at the same time, and each connection lasts about 3 seconds. During that time the test takes a snapshot with `ps aux` and of the process tree:
 
 ```text
     PID    PPID STAT     ELAPSED CMD
     504     484 S+         00:01 ./server -p 9090
     517     504 S+         00:01  \_ ./server -p 9090
     518     504 S+         00:01  \_ ./server -p 9090
-    ...                              (共 12 個 child，PPID 都是 504)
+    ...                              (12 children in total, all with PPID 504)
 server children alive           : 12
 established TCP conns on :9090  : 12
 ```
 
-- **ps 證明：** 共 13 個 `./server` 進程（1 個 parent、12 個 child），12 條 ESTABLISHED 連線，server log 出現 `active=12`。
-- **PID 交叉比對：** 12 個 client 收到的 `pid=` 互不相同，而且都出現在 ps 快照中。
-- **結束後：** 0 個殭屍、0 個殘留子進程；server log 記錄 12 筆 accepted、12 筆 reaped。
+- **ps proof:** 13 `./server` processes in total (1 parent and 12 children), 12 ESTABLISHED connections, and `active=12` in the server log.
+- **PID cross-check:** The `pid=` values received by the 12 clients are all different, and all of them appear in the ps snapshot.
+- **Afterwards:** 0 zombies and 0 leftover children; the server log records 12 accepted and 12 reaped.
 
-### 6.2 test_robustness：五組 With/Without 對照
+### 6.2 test_robustness: five With/Without comparisons
 
-以下數字來自 `logs/test_robustness.log`。
+The numbers below come from `logs/test_robustness.log`.
 
-| 機制 | 測試情境 | Without（關閉） | With（預設） |
+| Mechanism | Scenario | Without (off) | With (default) |
 |---|---|---|---|
-| [1] 回收子進程 | 3 個 client 依序查詢 | **3 個** `[server] <defunct>` 殭屍 | 0 個殭屍，log 記錄 3 筆回收 |
-| [2] 忽略 SIGPIPE | `--mode abort`：收到 1 行就斷線 | 子進程 `killed by signal 13 (Broken pipe)` | `client left before snapshot 3/10`，子進程 exit 3 |
-| [3] 長度上限 | `--mode longline`：16 MiB 不換行 | 緩衝區長到 **32768 KiB**，子進程 RSS **17808 KiB** | 讀到 127 bytes 就回 `ERROR request too long` |
-| [4] 連線上限 | 10 個 `--mode idle` client 同時連線 | **10 個**子進程 | 5 個子進程，另外 5 個 client 收到 `ERROR server busy` |
-| [5] pdeathsig | `WATCH 10 300` 進行中 `kill -9` parent | 子進程變成**孤兒**（PPID 改變），10 筆全部送完 | 子進程跟著結束，client 只收到 3/10 筆 |
+| [1] Reaping children | 3 clients query one after another | **3** `[server] <defunct>` zombies | 0 zombies; the log records 3 reaps |
+| [2] Ignoring SIGPIPE | `--mode abort`: disconnects after 1 line | Child `killed by signal 13 (Broken pipe)` | `client left before snapshot 3/10`, the child exits 3 |
+| [3] Length limit | `--mode longline`: 16 MiB with no newline | The buffer grows to **32768 KiB**, child RSS **17808 KiB** | `ERROR request too long` after 127 bytes |
+| [4] Connection limit | 10 `--mode idle` clients connect at the same time | **10** child processes | 5 child processes; the other 5 clients get `ERROR server busy` |
+| [5] pdeathsig | `kill -9` the parent during `WATCH 10 300` | The child becomes an **orphan** (its PPID changes) and sends all 10 | The child ends with the parent; the client gets only 3/10 |
 
-**手動展示：** 開兩個終端機視窗，A 跑 server，B 跑 client。
+**Manual demo:** Open two terminal windows: A runs the server and B runs the client.
 
-| 機制 | A 視窗 | B 視窗 | 觀察重點 |
+| Mechanism | Window A | Window B | What to look for |
 |---|---|---|---|
-| [1] | `./server --no-sigchld` | `./client` 執行 3 次，再 `ps -o pid,stat,cmd --ppid <parent PID>` | 3 個 `Z` 狀態的 `<defunct>` |
-| [2] | `./server --no-sigpipe` 與 `./server` | `./client --mode abort` | A 的 log：`killed by signal 13` 與 `exit 3 (client left)` |
-| [3] | `./server --no-validate` 與 `./server` | `./client --mode longline` | A 的 log：`buffer grown to ... KiB` 與 `request too long` |
-| [4] | `./server -m 2` | 開 3 個 `./client --mode idle &`，看完再 `pkill -x client` | 第 3 個立刻收到 `ERROR server busy` |
-| [5] | `./server --no-pdeathsig` 與 `./server` | `./client -n 20 -w 500`，再 `kill -9 <parent PID>` | client 是否繼續收到資料 |
+| [1] | `./server --no-sigchld` | Run `./client` 3 times, then `ps -o pid,stat,cmd --ppid <parent PID>` | 3 `<defunct>` entries in state `Z` |
+| [2] | `./server --no-sigpipe` and `./server` | `./client --mode abort` | Log in A: `killed by signal 13` and `exit 3 (client left)` |
+| [3] | `./server --no-validate` and `./server` | `./client --mode longline` | Log in A: `buffer grown to ... KiB` and `request too long` |
+| [4] | `./server -m 2` | Start 3 `./client --mode idle &`, then `pkill -x client` when done | The 3rd one gets `ERROR server busy` right away |
+| [5] | `./server --no-pdeathsig` and `./server` | `./client -n 20 -w 500`, then `kill -9 <parent PID>` | Whether the client keeps receiving data |
 
-### 6.3 test_debug：雙層 Debug
+### 6.3 test_debug: two-level debug
 
-| 檢查項目 | release（`make DEBUG=0`） | debug（`make DEBUG=1`） |
+| Check | release (`make DEBUG=0`) | debug (`make DEBUG=1`) |
 |---|---|---|
-| gcc 指令帶 `-DENABLE_DEBUG` | 0/3 | 3/3 |
-| 執行檔中的 debug 專用格式字串（`strings`） | **0** | 4 |
-| `write_all()` 內對 logger 的呼叫（`objdump -d`） | **0** | 2（`log_write@plt`） |
-| `libutils.so` text 區段大小 | 8,333 bytes | 8,741 bytes |
-| 用 `-d 2` 執行時的 DEBUG 行數 | 0，並警告 `-d 2 has no effect` | — |
+| gcc commands with `-DENABLE_DEBUG` | 0/3 | 3/3 |
+| Debug-only format strings in the executables (`strings`) | **0** | 4 |
+| Logger calls inside `write_all()` (`objdump -d`) | **0** | 2 (`log_write@plt`) |
+| Size of the `libutils.so` text section | 8,333 bytes | 8,741 bytes |
+| DEBUG lines when run with `-d 2` | 0, with the warning `-d 2 has no effect` | — |
 
-debug 版處理一次 `SYSINFO` 時，server log 的行數：
+Lines in the server log when the debug build handles one `SYSINFO`:
 
-| 等級 | 總行數 | INFO/WARN | DEBUG | hex dump |
+| Level | Total lines | INFO/WARN | DEBUG | hex dump |
 |---|---|---|---|---|
 | `-d 0` | 6 | 6 | 0 | 0 |
-| `-d 1` | 11 | 6 | 5（附 `file:line`） | 0 |
-| `-d 2` | 21 | 6 | 15 | 10（請求開頭為 `53 59 53 49 4e 46 4f`，即 `SYSINFO`） |
+| `-d 1` | 11 | 6 | 5 (with `file:line`) | 0 |
+| `-d 2` | 21 | 6 | 15 | 10 (the request starts with `53 59 53 49 4e 46 4f`, that is `SYSINFO`) |
 
-### 6.4 test_capture：tcpdump 抓包與標頭分析
+### 6.4 test_capture: tcpdump capture and header analysis
 
-測試程式在 `lo` 上執行 `tcpdump -i lo -n -w logs/capture.pcap 'tcp port 9090'`，期間送出 `SYSINFO`、`WATCH 3 200` 和 `HELLO` 三個請求，結束後：
+The test runs `tcpdump -i lo -n -w logs/capture.pcap 'tcp port 9090'` on `lo` and meanwhile sends three requests, `SYSINFO`, `WATCH 3 200` and `HELLO`. Afterwards:
 
-1. `tcpdump -r logs/capture.pcap -n -c 10` 逐包列出第一條連線。
-2. `tcpdump -r ... -n -x -c 4` 顯示前 4 個封包的 hex。
-3. 測試程式內建的 pcap 讀取器（24-byte 檔頭、每包 16-byte 紀錄頭）逐包解析，並把請求封包拆成各層標頭：
+1. `tcpdump -r logs/capture.pcap -n -c 10` lists the first connection packet by packet.
+2. `tcpdump -r ... -n -x -c 4` shows the hex of the first 4 packets.
+3. The test's built-in pcap reader (24-byte file header, 16-byte record header per packet) parses every packet and breaks the request packet into its header layers:
 
 ```text
   #   time      dir   flags         rel seq  rel ack  len  payload
@@ -366,43 +366,43 @@ debug 版處理一次 `SYSINFO` 時，server log 的行數：
   payload  0x0042:  53 59 53 49 4e 46 4f 0a
 ```
 
-- **三向交握：** SYN → SYN+ACK → ACK。
-- **資料：** 請求 8 bytes（`SYSINFO\n`），回應 107 bytes（一行 `OK ...`）。
-- **關閉：** server 先送 FIN（子進程處理完就關閉），client 回 FIN，各自 ACK。
-- **標頭欄位：** IPv4 標頭 20 bytes（`45` = version 4、IHL 5），protocol 6 是 TCP；TCP 標頭 32 bytes（20 bytes 加上 timestamp 選項），flags `0x18` = PSH+ACK。
+- **Three-way handshake:** SYN → SYN+ACK → ACK.
+- **Data:** An 8-byte request (`SYSINFO\n`) and a 107-byte reply (one `OK ...` line).
+- **Close:** The server sends FIN first (the child closes as soon as it is done), the client answers with its own FIN, and each side ACKs the other.
+- **Header fields:** The IPv4 header is 20 bytes (`45` = version 4, IHL 5), and protocol 6 is TCP; the TCP header is 32 bytes (20 bytes plus the timestamp option), and flags `0x18` = PSH+ACK.
 
-**用 Wireshark 開啟：** `logs/capture.pcap`，display filter 輸入 `tcp.port == 9090`，對封包按右鍵選 Follow → TCP Stream，就能看到請求和回應的文字。
+**Opening it in Wireshark:** Open `logs/capture.pcap`, enter the display filter `tcp.port == 9090`, right-click a packet and choose Follow → TCP Stream to see the text of the request and the reply.
 
-**權限：** tcpdump 需要 root。用一般帳號執行時，測試程式會先以 `sudo -v` 詢問一次密碼，之後只有 tcpdump 以 root 執行。在 Windows 上也可以直接用 WSL 的 root 執行（先在終端機切到專案資料夾）：
+**Permissions:** tcpdump needs root. When the test runs as a normal user, it first asks for the password once with `sudo -v`, and after that only tcpdump runs as root. On Windows you can also run it directly as root in WSL (first change to the project folder in the terminal):
 
 ```bash
 wsl -d Ubuntu -u root -- make test-capture
 ```
 
-### 6.5 logs/ 檔案一覽
+### 6.5 Files in logs/
 
-| 檔案 | 內容 |
+| File | Contents |
 |---|---|
-| `test_concurrent.log`、`test_robustness.log`、`test_debug.log`、`test_capture.log` | 四項測試的完整輸出 |
-| `capture.pcap` | tcpdump 抓包檔，可用 Wireshark 開啟 |
-| `capture_decoded.txt` | `tcpdump -r capture.pcap -n -x` 的完整輸出 |
-| `real_test.log`、`real_test.pcapng` | Real Test 的紀錄（兩邊的輸出和連線統計）與 Windows 端的抓包檔 |
+| `test_concurrent.log`, `test_robustness.log`, `test_debug.log`, `test_capture.log` | Full output of the four tests |
+| `capture.pcap` | tcpdump capture file; opens in Wireshark |
+| `capture_decoded.txt` | Full output of `tcpdump -r capture.pcap -n -x` |
+| `real_test.log`, `real_test.pcapng` | Record of the Real Test (output from both sides and the connection statistics) and the capture file from the Windows side |
 
-每個情境的 server、client 細項紀錄（`robust_*`、`concurrent_*`、`debug_*`、`capture_server.log`）沒有放進 repo，重跑測試後會自動產生在 `logs/`。
+The detailed server and client logs of each scenario (`robust_*`, `concurrent_*`, `debug_*`, `capture_server.log`) are not in the repo; rerunning the tests creates them in `logs/`.
 
 ---
 
-## 7. Real Test：Windows ↔ WSL2
+## 7. Real Test: Windows ↔ WSL2
 
-前面的測試都在 loopback（`127.0.0.1`）上進行，封包不會離開 kernel。Real Test 改從 **Windows** 連到 **WSL2** 裡的 server：兩邊是不同的作業系統，各有自己的 IP，封包要經過 Hyper-V 的虛擬網卡 `vEthernet (WSL)`，Wireshark 可以在 Windows 端抓到。
+All the tests above run over loopback (`127.0.0.1`), so the packets never leave the kernel. The Real Test connects from **Windows** to the server inside **WSL2** instead: the two sides are different operating systems with their own IP addresses, the packets pass through the Hyper-V virtual network adapter `vEthernet (WSL)`, and Wireshark can capture them on the Windows side.
 
-`client.c` 要連結 `libutils.so`，只能在 Linux 執行，所以另外寫了一支 Windows 版的 [tests/win_client.c](tests/win_client.c)。它用 Winsock 送出同樣的一行請求，印出每一行回覆，一樣沒有逾時。
+`client.c` links `libutils.so` and can only run on Linux, so a separate Windows client, [tests/win_client.c](tests/win_client.c), was written. It sends the same one-line request with Winsock and prints every reply line; it has no timeout either.
 
-**限制：** 兩邊在同一台實體電腦上，網路是虛擬的，延遲和掉包都比真實網路少。
+**Limitation:** Both sides are on the same physical computer and the network is virtual, so there is less delay and packet loss than on a real network.
 
-**步驟：**
+**Steps:**
 
-1. WSL 終端機：建置 Windows client（需要 mingw-w64，Ubuntu 上用 `sudo apt install mingw-w64` 安裝），查 WSL 的 IP，再啟動 server。
+1. WSL terminal: build the Windows client (this needs mingw-w64; on Ubuntu install it with `sudo apt install mingw-w64`), look up the WSL IP address, then start the server.
 
    ```bash
    make win-client && hostname -I
@@ -412,8 +412,8 @@ wsl -d Ubuntu -u root -- make test-capture
    ./server -d 1
    ```
 
-2. Wireshark：選 `vEthernet (WSL (Hyper-V firewall))` 介面開始抓包，display filter 輸入 `tcp.port == 9090`。
-3. Windows PowerShell：進到專案資料夾，把下面的 `172.17.107.87` 換成第 1 步查到的 IP。
+2. Wireshark: start capturing on the `vEthernet (WSL (Hyper-V firewall))` interface and enter the display filter `tcp.port == 9090`.
+3. Windows PowerShell: go to the project folder and replace `172.17.107.87` below with the IP address found in step 1.
 
    ```powershell
    .\win_client.exe 172.17.107.87
@@ -421,7 +421,7 @@ wsl -d Ubuntu -u root -- make test-capture
    .\win_client.exe 172.17.107.87 9090 HELLO
    ```
 
-**結果**（[logs/real_test.log](logs/real_test.log)）：
+**Results** ([logs/real_test.log](logs/real_test.log)):
 
 ```text
 PS> .\win_client.exe 172.17.107.87 9090 "WATCH 3 500"
@@ -433,24 +433,24 @@ request: WATCH 3 500
   1011.47 ms  server closed the connection: 3 OK line(s), 0 ERROR line(s)
 ```
 
-| 項目 | 結果 |
+| Item | Result |
 |---|---|
-| 位址 | client 是 Windows 的 `172.17.96.1`，server 是 WSL2 的 `172.17.107.87`，不是 `127.0.0.1` |
-| 三個請求 | `SYSINFO` 收到 1 行 `OK`；`WATCH 3 500` 每隔約 500 ms 收到 1 行，共 3 行；`HELLO` 收到 `ERROR unknown request` |
-| Server log | 3 條連線各由一個 child 處理（PID 3333、3334、3335），結束後全部回收，exit code 分別是 0、0、2 |
-| 抓包 | `logs/real_test.pcapng` 共 34 個封包、3 條 TCP 連線；Ethernet 位址是 Hyper-V 虛擬網卡（`00:15:5d:...`），每條連線都有三向交握、請求、回應和雙方的 FIN |
+| Addresses | The client is Windows at `172.17.96.1` and the server is WSL2 at `172.17.107.87`, not `127.0.0.1` |
+| Three requests | `SYSINFO` gets 1 `OK` line; `WATCH 3 500` gets 3 lines, about 500 ms apart; `HELLO` gets `ERROR unknown request` |
+| Server log | Each of the 3 connections is handled by its own child (PIDs 3333, 3334 and 3335); all of them are reaped afterwards, with exit codes 0, 0 and 2 |
+| Capture | `logs/real_test.pcapng` has 34 packets over 3 TCP connections; the Ethernet addresses belong to the Hyper-V virtual network adapter (`00:15:5d:...`), and every connection shows the three-way handshake, the request, the reply and a FIN from each side |
 
 ---
 
-## 8. 測試環境
+## 8. Test Environment
 
-- WSL2 Ubuntu，kernel `6.18.33.2-microsoft-standard-WSL2`
-- gcc 15.2.0、GNU Make 4.4.1、tcpdump 4.99.6
+- WSL2 Ubuntu, kernel `6.18.33.2-microsoft-standard-WSL2`
+- gcc 15.2.0, GNU Make 4.4.1, tcpdump 4.99.6
 
-## 9. 限制
+## 9. Limitations
 
-- **只支援 Linux：** 用到 `prctl(PR_SET_PDEATHSIG)`、`sysinfo(2)` 和 `/proc/meminfo`。
-- **只支援 IPv4：** server 監聽 `0.0.0.0`，client 用 `AF_INET` 連線。
-- **沒有逾時：** server 和 client 都沒有逾時。連上後不送資料的 client 會一直佔著一個子進程，直到它斷線，機制 [4] 限制這種 client 最多佔用的數量；server 不回應時，client 會一直等到使用者按 `Ctrl+C`。
-- **沒有加密與身分驗證：** 連得上 server 的人都能讀到系統資訊。
-- **`make test-capture` 需要 root 權限。**
+- **Linux only:** Uses `prctl(PR_SET_PDEATHSIG)`, `sysinfo(2)` and `/proc/meminfo`.
+- **IPv4 only:** The server listens on `0.0.0.0` and the client connects with `AF_INET`.
+- **No timeouts:** Neither the server nor the client has a timeout. A client that connects and sends nothing holds a child process until it disconnects; mechanism [4] limits how many children such clients can hold. If the server does not reply, the client waits until the user presses `Ctrl+C`.
+- **No encryption or authentication:** Anyone who can reach the server can read its system information.
+- **`make test-capture` needs root.**
