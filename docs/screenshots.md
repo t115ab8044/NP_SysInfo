@@ -2,7 +2,7 @@
 
 [← 回到 README](../README.md) ・ [系統設計說明](system-design.md) ・ [關鍵原始碼說明](key-source.md) ・ [稽核討論](audit.md)
 
-除了第 13～15 節的 Wireshark 和 Windows PowerShell 畫面，其他都是在 WSL2 Ubuntu 上實際執行的畫面。每張圖上方是產生該畫面的指令，在專案資料夾執行即可重現。截圖 3、5、14 都會在 9090 埠啟動 server，執行前要先確定沒有其他 server 在跑。
+除了第 13～15 節的 Wireshark 和 Windows PowerShell 畫面，其他都是在 WSL2 Ubuntu 上實際執行的畫面。每張圖上方是產生該畫面的指令，在專案資料夾執行即可重現。截圖 3、14 都會在 9090 埠啟動 server，執行前要先確定沒有其他 server 在跑。
 
 ## 1. 建置與動態函式庫
 
@@ -44,63 +44,83 @@ release 版的 debug 字串為 0 個，`write_all()` 內也沒有 logger 呼叫�
 
 ![編譯期 Debug 驗證結果](screenshots/04_debug_compile.png)
 
-## 5. With/Without [1]：殭屍程序
+## 5. With/Without [1]：12 個 client 同時斷線
 
 ```bash
-./server --no-sigchld 2>/dev/null & sleep 0.3; for i in 1 2 3; do ./client >/dev/null 2>&1; done; sleep 0.3; ps -o pid,ppid,stat,cmd --ppid $!; kill $!
+sed -n '/^==== \[1\]/,/\[1\] with the loop/p' logs/test_robustness.log
 ```
 
-```bash
-./server 2>/dev/null & sleep 0.3; for i in 1 2 3; do ./client >/dev/null 2>&1; done; sleep 0.3; ps -o pid,ppid,stat,cmd --ppid $!; kill $!
-```
+12 個 `--mode idle` client 連上後一起被 `kill -9`，12 個 child 幾乎同時結束。signal 不會排隊，parent 只收到幾次 SIGCHLD。Without（`--reap-once`，每個 SIGCHLD 只呼叫一次 `waitpid`）只回收 2 個，另外 10 個停在 `Z` 狀態，parent 的計數也停在 `active=10`；With 用迴圈一次收完，12 個全部回收。
 
-Without 留下 3 個 `Z` 狀態的 `<defunct>`，With 沒有任何殘留的 child。
+![waitpid 迴圈的 With/Without 對比](screenshots/05_reap_once.png)
 
-![殭屍程序的 With/Without 對比](screenshots/05_zombie.png)
+## 6. With/Without [2]：client 中途離開
 
-## 6. With/Without [2]：client 中途離開（SIGPIPE）
+### 6.1 [2a] client 正常關閉（SIGPIPE）
 
 ```bash
-sed -n '/^==== \[2\]/,/both: the next client/p' logs/test_robustness.log
+sed -n '/^==== \[2a\]/,/\[2a\] both/p' logs/test_robustness.log
 ```
 
 Without 時 child 被 signal 13 殺掉，With 時 child 偵測 `EPIPE` 後以 exit 3 正常結束；兩種情況下 parent 都能繼續服務。
 
 ![SIGPIPE 的 With/Without 對比](screenshots/06_sigpipe.png)
 
-## 7. With/Without [3]：不換行的超長請求
+### 6.2 [2b] client 的網路突然消失（TCP_USER_TIMEOUT）
 
 ```bash
-sed -n '/^==== \[3\]/,/with: rejected after/p' logs/test_robustness.log
+sed -n '/^==== \[2b\]/,/\[2b\] with:/p' logs/test_robustness.log
 ```
 
-Without 時緩衝區一路加倍到 32 MiB，child 的 RSS 約 17 MiB；With 時讀到 127 bytes 就回 `ERROR request too long`。
+client 收到 2 筆後，`tc qdisc add dev lo root netem loss 100%` 丟掉 loopback 上的所有封包，client 也跟著消失。Without 時每次 `write()` 都成功，child 又「送」了 9 秒，最後記錄 `exit 0 (request served)`；With 時斷線 4.0 秒後 `write()` 回傳 `ETIMEDOUT`，child 記錄 `client unreachable` 並停止。測試程式在自己的 network namespace 裡執行 `tc`，不需要 root，也不影響系統的網路。
 
-緩衝區配置到 32 MiB，但實際只寫入 16 MiB；沒寫到的部分 Linux 不會配實體記憶體，所以 RSS 約 17 MiB。With 的 `ps` 沒有列出 child，是因為 child 拒絕請求後 2 ms 內就結束了。
+![TCP_USER_TIMEOUT 的 With/Without 對比](screenshots/06_net_vanish.png)
 
-![請求長度上限的 With/Without 對比](screenshots/07_longline.png)
-
-## 8. With/Without [4]：連線上限
+## 7. With/Without [3]：四種惡意請求
 
 ```bash
-sed -n '/^==== \[4\]/,/with -m 5:/p' logs/test_robustness.log
+sed -n '/^==== \[3\]/,/\[3\] with:/p' logs/test_robustness.log
 ```
 
-Without 時 10 個閒置 client 佔住 10 個 child；With（`-m 5`）時只有 5 個 child，另外 5 個 client 立刻收到 `ERROR server busy`。
+同一個 server 依序收到 4 個請求：(a) 16 MiB 不換行、(b) `WATCH 4294967297 100`、(c) `WATCH 100 0`、(d) `WATCH 100000 1000`。Without 時 4 個都被接受：(a) 緩衝區加倍到 32 MiB，child 的 RSS 約 17 MiB；(b) 4294967297 溢位成 1，log 記錄 `-> 1 snapshot(s)`；(c) 100 行在 22 ms 內送完；(d) 這個請求要跑 27.8 小時。With 時 4 個都收到 `ERROR`。
 
-![連線上限的 With/Without 對比](screenshots/08_limit.png)
+緩衝區配置到 32 MiB，但實際只寫入 16 MiB；沒寫到的部分 Linux 不會配實體記憶體，所以 RSS 約 17 MiB。
 
-## 9. With/Without [5]：parent 被 `kill -9`
+![請求驗證的 With/Without 對比](screenshots/07_malicious.png)
+
+## 8. With/Without [4]：Slowloris
 
 ```bash
-sed -n '/^==== \[5\]/,/with: the child ends/p' logs/test_robustness.log
+sed -n '/^==== \[4\]/,/\[4\] with:/p' logs/test_robustness.log
+```
+
+32 個 `--mode slow` client 每 0.5 秒送 1 byte、永遠不送換行，佔滿 server 預設的 32 個名額。4 秒後再來一個正常的 client：Without 時 32 個 child 還在等，正常的 client 收到 `ERROR server busy`；With 時 32 個在第 3 秒收到 `ERROR request timeout`（3 秒內每個只送出 7 bytes，連 `SYSINFO` 都還沒送完），正常的 client 得到服務。
+
+![請求期限的 With/Without 對比](screenshots/08_slowloris.png)
+
+## 9. With/Without [5]：server 結束
+
+### 9.1 [5a] parent 被 `kill -9`
+
+```bash
+sed -n '/^==== \[5a\]/,/\[5a\] with:/p' logs/test_robustness.log
 ```
 
 Without 時 child 變成孤兒（PPID 改變）並把 10 筆送完；With 時 child 跟著 parent 結束，client 只收到 3 筆。
 
 ![PR_SET_PDEATHSIG 的 With/Without 對比](screenshots/09_pdeathsig.png)
 
-## 10. 五組 With/Without 總表
+### 9.2 [5b] `Ctrl+C`
+
+```bash
+sed -n '/^==== \[5b\]/,/\[5b\] with:/p' logs/test_robustness.log
+```
+
+測試程式把 server 放在自己的 process group，再用 `kill -INT -<pgid>` 模擬 `Ctrl+C`。Without 時 server 和 child 一起被 signal 2 殺掉，client 只收到 3 筆；With 時新的 client 立刻被拒絕（connection refused），正在服務的 client 收到全部 10 筆，server 等 child 做完後以 exit 0 結束。
+
+![優雅關閉的 With/Without 對比](screenshots/09_ctrl_c.png)
+
+## 10. 七組 With/Without 總表
 
 ```bash
 sed -n '/With \/ Without summary/,$p' logs/test_robustness.log

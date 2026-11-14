@@ -9,7 +9,7 @@
 | 目標 | 設計上的對應 |
 |---|---|
 | 多個 client 同時查詢，彼此不影響 | 每條連線 `fork()` 一個 child，一個 child 出錯不影響 parent 和其他連線 |
-| 遇到異常不當掉、不留垃圾 | 5 個穩健機制，處理程序、連線、輸入、資源四類異常 |
+| 遇到異常不當掉、不留垃圾 | 7 個穩健機制，處理 child 回收、連線中斷、惡意請求、慢速連線、server 結束五類異常 |
 | 每個保護機制都看得到效果 | 每個機制都能用參數關閉，實際比較有無機制的差異 |
 | 出問題時能追查 | 兩層 Debug：編譯期決定有沒有 debug 程式碼，執行期決定印多少 |
 
@@ -21,32 +21,32 @@ flowchart TD
     C["client"]
     subgraph SRV["server"]
         subgraph P["Server parent（一個程序）"]
-            A["主迴圈<br/>accept → [4] 檢查上限<br/>→ fork"]
-            H["SIGCHLD handler<br/>[1] waitpid 迴圈回收"]
+            A["主迴圈<br/>accept → 檢查上限<br/>→ fork"]
+            H["Signal handlers<br/>[1] SIGCHLD：waitpid 迴圈回收<br/>[5b] SIGINT：停止 accept"]
         end
-        K["Child 1 … N（預設最多 32 個）<br/>[2] 處理 EPIPE<br/>[3] 請求 ≤ 127 bytes<br/>[5] PDEATHSIG"]
+        K["Child 1 … N（預設最多 32 個）<br/>[2a] 處理 EPIPE<br/>[2b] TCP_USER_TIMEOUT 3 秒<br/>[3] 驗證請求<br/>[4] 請求 3 秒內送完<br/>[5a] PDEATHSIG<br/>[5b] 忽略 SIGINT"]
     end
     OS{{"Linux kernel"}}
     SO[("libutils.so")]
 
     C ==>|"① connect :9090"| A
-    A ==>|"[4] 滿了：ERROR server busy"| C
+    A ==>|"滿了：ERROR server busy"| C
     A -->|"② fork，連線交給 child"| K
     C <==>|"③ 請求與回覆"| K
-    K <-.->|"④ _exit(0–3)<br/>[5] parent 死掉時收到 SIGTERM"| OS
+    K <-.->|"④ _exit(0–4)<br/>[5a] parent 死掉時收到 SIGTERM"| OS
     H <-.->|"⑤ SIGCHLD → waitpid()"| OS
     C --- SO
     SRV --- SO
 ```
 
-**圖例：** 粗線是 TCP 上的資料，細實線是 `fork()`，虛線是和 kernel 之間的互動（程序結束、訊號、回收），沒有箭頭的線是動態連結。①～⑤ 是一條連線的先後順序；[1]～[5] 是[第 5 節](#5-穩健性設計)的穩健機制，標在負責它的程序上。
+**圖例：** 粗線是 TCP 上的資料，細實線是 `fork()`，虛線是和 kernel 之間的互動（程序結束、訊號、回收），沒有箭頭的線是動態連結。①～⑤ 是一條連線的先後順序；[1]～[5b] 是[第 5 節](#5-穩健性設計)的穩健機制，標在負責它的程序上。
 
 ### 程序模型（Process Model）
 
 | 角色 | 職責 | 不做的事 |
 |---|---|---|
-| **Parent** | `accept()`、檢查連線上限、`fork()`、回收 child、記錄 log | 不讀 client 的資料；只有在達上限時寫一行 `ERROR server busy` |
-| **Child** | 讀一行請求、驗證、回覆、`_exit(原因代碼)` | 不 accept（一 fork 就關掉 listening socket） |
+| **Parent** | `accept()`、檢查連線上限、`fork()`、回收 child、記錄 log；`Ctrl+C` 時等 child 做完再結束 | 不讀 client 的資料；只有在達上限時寫一行 `ERROR server busy` |
+| **Child** | 讀一行請求、驗證、回覆、`_exit(原因代碼)` | 不 accept（一 fork 就關掉 listening socket）；不理會 `Ctrl+C`，由 parent 決定什麼時候結束 |
 
 整個專案沒有使用 thread。
 
@@ -56,7 +56,7 @@ flowchart TD
 
 ### 共用函式庫（Shared Library）
 
-client 和 server 都動態連結 **`libutils.so`**：logger、`write_all`、`read_line`、系統資訊擷取與格式化。server 的回覆由 `sysinfo_format()` 產生，client 用 `read_line()` 讀回來直接印出。
+client 和 server 都動態連結 **`libutils.so`**：logger、`write_all`、`read_line`／`read_line_timeout`、系統資訊擷取與格式化。server 的回覆由 `sysinfo_format()` 產生，client 用 `read_line()` 讀回來直接印出。
 
 
 ## 3. 執行流程
@@ -96,18 +96,19 @@ sequenceDiagram
 
 ### Parent 主迴圈
 
-parent 重複「**輸出回收紀錄 → `accept()` → 檢查上限 → `fork()`**」。`accept()` 被 SIGCHLD 打斷時回傳 `EINTR`，parent 回到迴圈開頭，先把剛回收的 child 寫進 log 再繼續等待。
+parent 重複「**輸出回收紀錄 → `accept()` → 檢查上限 → `fork()`**」。`accept()` 被 SIGCHLD 打斷時回傳 `EINTR`，parent 回到迴圈開頭，先把剛回收的 child 寫進 log 再繼續等待。按下 `Ctrl+C` 後離開迴圈，等所有 child 做完才結束（[5b]）。
 
 ### Child 處理請求
 
-child 讀一行請求（最多 127 bytes），判斷是 `SYSINFO`、`WATCH` 還是錯誤，回覆後結束。exit code 說明結束原因，parent 回收時寫進 log：
+child 讀一行請求（最多 127 bytes，3 秒內要送完），判斷是 `SYSINFO`、`WATCH` 還是錯誤，回覆後結束。exit code 說明結束原因，parent 回收時寫進 log：
 
 | exit code | 原因 |
 |---|---|
 | 0 | 請求處理完成 |
 | 1 | I/O 錯誤 |
 | 2 | 請求被拒絕（太長、未知指令、參數錯誤） |
-| 3 | client 已經離開 |
+| 3 | client 已經離開（`EPIPE`），或網路斷了連不到（`ETIMEDOUT`） |
+| 4 | 請求逾時：3 秒內沒有送完一行 |
 
 ## 4. 雙層 Debug
 
@@ -120,25 +121,30 @@ child 讀一行請求（最多 127 bytes），判斷是 `SYSINFO`、`WATCH` 還�
 
 ## 5. 穩健性設計
 
-5 個機制處理四類異常，每個機制都能用參數關閉，比較有無機制的差異。
+7 個機制處理五類異常，每個機制都能用參數關閉，比較有無機制的差異。
 
 | 異常類型 | 會發生什麼 | 機制 | 關閉參數 |
 |---|---|---|---|
-| 程序：child 結束沒人收 | 殭屍程序佔滿 process table | [1] SIGCHLD handler + `waitpid` 迴圈 | `--no-sigchld` |
-| 程序：parent 被 `kill -9` | child 變成孤兒，沒人管理 | [5] `PR_SET_PDEATHSIG` | `--no-pdeathsig` |
-| 連線：client 中途離開 | child 寫入時被 SIGPIPE 殺掉 | [2] 忽略 SIGPIPE，處理 `EPIPE` | `--no-sigpipe` |
-| 輸入：不換行的超長請求 | child 記憶體無限長大 | [3] 請求最多 127 bytes | `--no-validate` |
-| 資源：大量或閒置連線 | 無限多個 child | [4] 連線上限，超過由 parent 直接拒絕 | `--no-limit` |
+| child 回收：12 個 child 同時結束 | signal 不排隊，只收一次的寫法留下殭屍 | [1] SIGCHLD handler 內的 `waitpid` 迴圈 | `--reap-once` |
+| 連線：client 正常關閉 | child 寫入時被 SIGPIPE 殺掉 | [2a] 忽略 SIGPIPE，處理 `EPIPE` | `--no-sigpipe` |
+| 連線：client 的網路突然消失 | 沒有 FIN、RST，`write()` 一直成功，child 對空氣送資料 | [2b] `TCP_USER_TIMEOUT` 3 秒 | `--no-user-timeout` |
+| 輸入：惡意請求 | 記憶體無限長大、數字溢位、0 ms 洪水、27.8 小時的請求 | [3] 長度上限、`%3d %5d`、範圍檢查 | `--no-validate` |
+| 慢速連線：Slowloris | 32 條慢速連線佔滿名額，正常的 client 進不來 | [4] 整行請求 3 秒內要送完 | `--no-deadline` |
+| server 結束：parent 被 `kill -9` | child 變成孤兒，沒人管理 | [5a] `PR_SET_PDEATHSIG` | `--no-pdeathsig` |
+| server 結束：按 `Ctrl+C` | 正在服務的 client 被一起切斷 | [5b] 停止 accept，等 child 做完 | `--no-graceful` |
 
-**[1] 和 [5] 是一組：** 殭屍是「child 死了、parent 沒收」，孤兒是「parent 死了、child 還在」。兩個機制合起來，保證 child 的生命週期一定跟著 parent。
+**兩兩成對：** [1] 和 [5a] 一個是「child 死了、parent 沒收」（殭屍），一個是「parent 死了、child 還在」（孤兒），合起來保證 child 的生命週期一定跟著 parent。[2a] 和 [2b] 都是 client 中途離開，差別在 client 有沒有機會通知 server。[5a] 和 [5b] 都是 server 結束，一個是被殺，一個是有人要它停下來；[5b] 等太久時，再由 [5a] 收掉剩下的 child。
 
-實測對照見 [README 6.2](../README.md#62-test_robustness五組-withwithout-對照)。
+連線上限（`-m`，預設 32）是一般功能，不算在 7 個機制裡：它只能限制 child 的數量，擋不住 Slowloris，所以還需要 [4]。
+
+實測對照見 [README 6.2](../README.md#62-test_robustness七組-withwithout-對照)。
 
 ## 6. 設計取捨與限制
 
 | 決定 | 好處 | 代價 |
 |---|---|---|
-| 每條連線 fork 一個 child | 隔離性好，一個 child 當掉不影響其他連線；程式簡單 | 每條連線一個程序，比 thread 耗資源，所以用 [4] 限制數量（預設 32） |
+| 每條連線 fork 一個 child | 隔離性好，一個 child 當掉不影響其他連線；程式簡單 | 每條連線一個程序，比 thread 耗資源，所以用 `-m` 限制數量（預設 32） |
+| 兩個 3 秒的期限（[2b]、[4]） | 斷線和慢速的 client 很快就被放掉，名額回得來 | 網路很差的正常 client（例如斷線超過 3 秒）也會被切斷；實際部署可以把時間調長 |
 | 請求和回應用一行純文字 | 抓包時直接讀得懂，用 `telnet` 或 `nc` 也能測 | 傳數字比二進位格式多幾個 bytes |
 | 一條連線只處理一個請求 | child 的流程單純，處理完就結束 | 每次查詢都要重新做三向交握 |
 | signal handler 只記錄，log 由主迴圈印 | 避免在 handler 裡呼叫不安全的 `printf()` | 回收紀錄可能延後到下一次 `accept()` 返回才印出 |

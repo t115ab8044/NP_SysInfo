@@ -8,9 +8,11 @@
  *                             half close: shutdown(SHUT_WR) right after the
  *                             request, then still read every reply
  *   ./client --mode MODE      misbehave on purpose, for the robustness demo:
- *       abort     ask for WATCH 10 200, read one snapshot, then leave   [2]
+ *       abort     ask for WATCH 10 200, read one snapshot, then leave  [2a]
  *       longline  send a 16 MiB request with no '\n' (size: --mib N)   [3]
- *       idle      connect, send nothing, wait for the server to act   [4]
+ *       slow      Slowloris: one byte of the request every 500 ms
+ *                 (-w MS), never the '\n'                              [4]
+ *       idle      connect, send nothing, wait for the server to act
  *
  * The client has no timeout: it waits until the server replies or closes
  * the connection. Ctrl+C ends it; the tests end idle clients themselves.
@@ -37,8 +39,9 @@
 #define REPLY_MAX       512
 #define DEFAULT_COUNT   5
 #define DEFAULT_MS      1000
+#define SLOW_GAP_MS     500             /* --mode slow: ms between two bytes */
 
-enum client_mode { MODE_NORMAL, MODE_ABORT, MODE_LONGLINE, MODE_IDLE };
+enum client_mode { MODE_NORMAL, MODE_ABORT, MODE_LONGLINE, MODE_SLOW, MODE_IDLE };
 
 enum { CLIENT_OK = 0, CLIENT_FAIL = 1, CLIENT_NO_REPLY = 2 };
 
@@ -167,7 +170,7 @@ static int run_normal(int fd)
     return CLIENT_OK;
 }
 
-/* [2] Ask for 10 snapshots, leave after the first one. */
+/* [2a] Ask for 10 snapshots, leave after the first one. */
 static int run_abort(int fd)
 {
     char line[REPLY_MAX];
@@ -226,7 +229,44 @@ static int run_longline(int fd)
     return CLIENT_OK;
 }
 
-/* [4] Connect, send nothing, and wait for whatever the server does. */
+/*
+ * [4] Slowloris: send the request one byte at a time, gap_ms apart, and
+ * never the '\n'; after the request text, keep trickling spaces. Every byte
+ * arrives well within any per-read timeout, so only a deadline for the
+ * whole line stops it. Ends when the server answers or closes.
+ */
+static int run_slow(int fd)
+{
+    const char *text = g_cfg.request != NULL ? g_cfg.request : "SYSINFO";
+    int gap_ms = g_cfg.interval_ms >= 0 ? g_cfg.interval_ms : SLOW_GAP_MS;
+    size_t len = strlen(text), sent = 0;
+    char line[REPLY_MAX];
+    double t0 = now_sec();
+    ssize_t n;
+
+    set_signal(SIGPIPE, SIG_IGN);       /* survive the server closing on us */
+    LOG_INFO("mode slow: \"%s\" one byte every %d ms, never a newline", text, gap_ms);
+    for (;;) {
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        char c = sent < len ? text[sent] : ' ';
+
+        if (write_all(fd, &c, 1) < 0)
+            break;                      /* the server has closed */
+        sent++;
+        if (poll(&pfd, 1, gap_ms) > 0)
+            break;                      /* the server answered or closed */
+    }
+    n = read_line(fd, line, sizeof(line));
+    if (n >= 0)
+        printf("RESULT: after %.1f s and %zu bytes the server replied: %s\n",
+               now_sec() - t0, sent, line);
+    else
+        printf("RESULT: after %.1f s and %zu bytes: %s\n", now_sec() - t0, sent,
+               n == READ_ERR && errno == ECONNRESET ? "connection reset" : read_error(n));
+    return CLIENT_OK;
+}
+
+/* Connect, send nothing, and wait for whatever the server does. */
 static int run_idle(int fd)
 {
     char line[REPLY_MAX];
@@ -251,17 +291,18 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [-H HOST] [-p PORT] [-d LEVEL] [-n COUNT] [-w MS]\n"
-            "          [-r LINE] [--half-close] [--mode abort|longline|idle] [--mib N]\n"
+            "          [-r LINE] [--half-close] [--mode abort|longline|slow|idle] [--mib N]\n"
             "  -H, --host HOST      server address (default 127.0.0.1)\n"
             "  -p, --port PORT      server port (default %d)\n"
             "  -d, --debug LEVEL    0 normal, 1 program flow, 2 flow + bytes (debug build only)\n"
             "  -n, --count COUNT    WATCH: number of snapshots (default %d)\n"
-            "  -w, --interval MS    WATCH: milliseconds between snapshots (default %d)\n"
+            "  -w, --interval MS    WATCH: milliseconds between snapshots (default %d);\n"
+            "                       slow: milliseconds between bytes (default %d)\n"
             "  -r, --request LINE   send LINE as the request\n"
             "  --half-close         shutdown(SHUT_WR) after the request, keep reading replies\n"
-            "  --mode MODE          abort [2], longline [3] or idle [4]\n"
+            "  --mode MODE          abort [2a], longline [3], slow [4] or idle\n"
             "  --mib N              longline: request size in MiB (default 16)\n",
-            prog, DEFAULT_PORT, DEFAULT_COUNT, DEFAULT_MS);
+            prog, DEFAULT_PORT, DEFAULT_COUNT, DEFAULT_MS, SLOW_GAP_MS);
 }
 
 static int parse_args(int argc, char *argv[])
@@ -315,6 +356,8 @@ static int parse_args(int argc, char *argv[])
                 g_cfg.mode = MODE_ABORT;
             else if (strcmp(optarg, "longline") == 0)
                 g_cfg.mode = MODE_LONGLINE;
+            else if (strcmp(optarg, "slow") == 0)
+                g_cfg.mode = MODE_SLOW;
             else if (strcmp(optarg, "idle") == 0)
                 g_cfg.mode = MODE_IDLE;
             else
@@ -359,6 +402,7 @@ int main(int argc, char *argv[])
     switch (g_cfg.mode) {
     case MODE_ABORT:    rc = run_abort(fd);    break;
     case MODE_LONGLINE: rc = run_longline(fd); break;
+    case MODE_SLOW:     rc = run_slow(fd);     break;
     case MODE_IDLE:     rc = run_idle(fd);     break;
     default:            rc = run_normal(fd);   break;
     }

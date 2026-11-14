@@ -1,151 +1,230 @@
 
 ==============================================================================
- Robustness: five mechanisms, each With and Without
+ Robustness: seven mechanisms, each With and Without
 ==============================================================================
-date     : 2026-11-12 16:03:08
+date     : 2026-11-14 00:43:03
 kernel   : Linux 6.18.33.2-microsoft-standard-WSL2
+network  : private network namespace, made without root; tc netem available
 
-==== [1] SIGCHLD handler + waitpid() loop ====
+==== [1] SIGCHLD handler: waitpid() loop ====
 
---- [1] WITHOUT: ./server -p 9090 --no-sigchld ---
-  $ ./client -p 9090   x 3 (one after another)
-  $ ps -o pid,ppid,stat,rss,cmd --ppid 1832
+--- [1] WITHOUT: ./server -p 9090 --reap-once ---
+  $ ./client -p 9090 --mode idle   x 12 (connect, send nothing)
+  12 children are serving them
+  $ kill -9 <the 12 clients>   (all of them disconnect at the same moment)
+  $ ps -o pid,ppid,stat,rss,cmd --ppid 18809
         PID    PPID STAT   RSS CMD
-       1834    1832 Z+       0 [server] <defunct>
-       1836    1832 Z+       0 [server] <defunct>
-       1838    1832 Z+       0 [server] <defunct>
-  children left: 3, zombies (STAT Z): 3
+      18823   18809 Z+       0 [server] <defunct>
+      18824   18809 Z+       0 [server] <defunct>
+      18825   18809 Z+       0 [server] <defunct>
+      18826   18809 Z+       0 [server] <defunct>
+      18827   18809 Z+       0 [server] <defunct>
+      18829   18809 Z+       0 [server] <defunct>
+      18830   18809 Z+       0 [server] <defunct>
+      18831   18809 Z+       0 [server] <defunct>
+      18832   18809 Z+       0 [server] <defunct>
+      18833   18809 Z+       0 [server] <defunct>
+  children reaped: 2 of 12, zombies (STAT Z): 10
+  the parent still counts active=10: it thinks those clients are connected
   server log:
-    | 16:03:08.666 [server:1832] INFO  robustness: [1] reap OFF | [2] ignore SIGPIPE ON | [3] length limit ON | [4] max clients 32 | [5] pdeathsig ON
+    | 00:43:03.912 [server:18809] INFO  reaped child 18828: exit 3 (client left) | active=11
+    | 00:43:03.919 [server:18809] INFO  reaped child 18822: exit 3 (client left) | active=10
 
 --- [1] WITH: ./server -p 9090  ---
-  $ ./client -p 9090   x 3 (one after another)
-  $ ps -o pid,ppid,stat,rss,cmd --ppid 1840
+  $ ./client -p 9090 --mode idle   x 12 (connect, send nothing)
+  12 children are serving them
+  $ kill -9 <the 12 clients>   (all of them disconnect at the same moment)
+  $ ps -o pid,ppid,stat,rss,cmd --ppid 18835
         PID    PPID STAT   RSS CMD
-  children left: 0, zombies (STAT Z): 0
+  children reaped: 12 of 12, zombies (STAT Z): 0
   server log:
-    | 16:03:09.056 [server:1840] INFO  robustness: [1] reap ON | [2] ignore SIGPIPE ON | [3] length limit ON | [4] max clients 32 | [5] pdeathsig ON
-    | 16:03:09.112 [server:1840] INFO  reaped child 1842: exit 0 (request served) | active=0
-    | 16:03:09.120 [server:1840] INFO  reaped child 1844: exit 0 (request served) | active=0
-    | 16:03:09.125 [server:1840] INFO  reaped child 1846: exit 0 (request served) | active=0
-  [PASS] [1] without: the 3 finished children stay zombies
-  [PASS] [1] with: 0 zombies, all 3 children reaped and logged
+    | 00:43:04.502 [server:18835] INFO  reaped child 18849: exit 3 (client left) | active=11
+    | 00:43:04.508 [server:18835] INFO  reaped child 18848: exit 3 (client left) | active=10
+    | ... and 10 more line(s) like these
+  [PASS] [1] without (one waitpid per signal): 2 of 12 reaped, 10 stay zombies
+  [PASS] [1] with the loop: all 12 reaped, 0 zombies
 
-==== [2] SIGPIPE ignored, EPIPE handled ====
+==== [2a] client leaves: SIGPIPE ignored, EPIPE handled ====
 
---- [2] WITHOUT: ./server -p 9090 --no-sigpipe ---
+--- [2a] WITHOUT: ./server -p 9090 --no-sigpipe ---
   $ ./client -p 9090 --mode abort
-    OK seq=1 pid=1850 host=LAPTOP-0F0NVT4H up=0d 00:36:17 load=0.03/0.03/0.00 mem_avail=6.97/7.61 GiB procs=215
+    OK seq=1 pid=18863 host=LAPTOP-0F0NVT4H up=0d 22:03:47 load=0.00/0.04/0.00 mem_avail=7.05/7.61 GiB procs=224
     RESULT: got snapshot 1 of 10, closing the connection now
   next ./client after that: exit 0 (the parent keeps serving)
   server log:
-    | 16:03:09.498 [server:1850] INFO  127.0.0.1:42176: WATCH 10 200 -> 10 snapshot(s)
-    | 16:03:09.900 [server:1848] WARN  reaped child 1850: killed by signal 13 (Broken pipe) | active=0
-    | 16:03:10.511 [server:1848] INFO  reaped child 1852: exit 0 (request served) | active=0
+    | 00:43:05.074 [server:18863] INFO  127.0.0.1:52448: WATCH 10 200 -> 10 snapshot(s)
+    | 00:43:05.476 [server:18861] WARN  reaped child 18863: killed by signal 13 (Broken pipe) | active=0
+    | 00:43:06.087 [server:18861] INFO  reaped child 18865: exit 0 (request served) | active=0
 
---- [2] WITH: ./server -p 9090  ---
+--- [2a] WITH: ./server -p 9090  ---
   $ ./client -p 9090 --mode abort
-    OK seq=1 pid=1855 host=LAPTOP-0F0NVT4H up=0d 00:36:18 load=0.03/0.03/0.00 mem_avail=6.98/7.61 GiB procs=215
+    OK seq=1 pid=18868 host=LAPTOP-0F0NVT4H up=0d 22:03:48 load=0.00/0.04/0.00 mem_avail=7.06/7.61 GiB procs=224
     RESULT: got snapshot 1 of 10, closing the connection now
   next ./client after that: exit 0 (the parent keeps serving)
   server log:
-    | 16:03:10.782 [server:1855] INFO  127.0.0.1:42190: WATCH 10 200 -> 10 snapshot(s)
-    | 16:03:11.184 [server:1855] INFO  127.0.0.1:42190: client left before snapshot 3/10 (Broken pipe) -> stop
-    | 16:03:11.185 [server:1853] INFO  reaped child 1855: exit 3 (client left) | active=0
-    | 16:03:11.795 [server:1853] INFO  reaped child 1857: exit 0 (request served) | active=0
-  [PASS] [2] without: the child is killed by SIGPIPE (signal 13)
-  [PASS] [2] with: write() returns EPIPE, the child logs it and exits 3
-  [PASS] [2] both: the next client is served
+    | 00:43:06.357 [server:18868] INFO  127.0.0.1:52464: WATCH 10 200 -> 10 snapshot(s)
+    | 00:43:06.759 [server:18868] INFO  127.0.0.1:52464: client left before snapshot 3/10 (Broken pipe) -> stop
+    | 00:43:06.760 [server:18866] INFO  reaped child 18868: exit 3 (client left) | active=0
+    | 00:43:07.369 [server:18866] INFO  reaped child 18870: exit 0 (request served) | active=0
+  [PASS] [2a] without: the child is killed by SIGPIPE (signal 13)
+  [PASS] [2a] with: write() returns EPIPE, the child logs it and exits 3
+  [PASS] [2a] both: the next client is served
 
-==== [3] request line length limit ====
+==== [2b] network vanishes: TCP_USER_TIMEOUT ====
+
+--- [2b] WITHOUT: ./server -p 9090 --no-user-timeout ---
+  $ ./client -p 9090 -n 20 -w 500   (20 snapshots in 10 s)
+  after 2 snapshots the client's network vanishes, and so does the client:
+  $ tc qdisc add dev lo root netem loss 100%   (drop every packet)
+  $ kill -9 18872
+  the child ended 9.0 s after the cut; the client had received 2 of 20
+  server log:
+    | 00:43:07.641 [server:18873] INFO  127.0.0.1:52486: WATCH 20 500 -> 20 snapshot(s)
+    | 00:43:17.148 [server:18871] INFO  reaped child 18873: exit 0 (request served) | active=0
+
+--- [2b] WITH: ./server -p 9090  ---
+  $ ./client -p 9090 -n 20 -w 500   (20 snapshots in 10 s)
+  after 2 snapshots the client's network vanishes, and so does the client:
+  $ tc qdisc add dev lo root netem loss 100%   (drop every packet)
+  $ kill -9 18877
+  the child ended 4.0 s after the cut; the client had received 2 of 20
+  server log:
+    | 00:43:17.246 [server:18878] INFO  127.0.0.1:33048: WATCH 20 500 -> 20 snapshot(s)
+    | 00:43:21.751 [server:18878] WARN  127.0.0.1:33048: client unreachable, no ACK for 3000 ms (Connection timed out) -> stop before snapshot 10/20
+    | 00:43:21.752 [server:18876] INFO  reaped child 18878: exit 3 (client left) | active=0
+  [PASS] [2b] without: every write() succeeds for 9.0 s, the child logs "request served" (client got 2 of 20)
+  [PASS] [2b] with: write() fails with ETIMEDOUT 4.0 s after the cut, the child stops
+
+==== [3] request validation: four malicious requests ====
 
 --- [3] WITHOUT: ./server -p 9090 --no-validate ---
-  $ ./client -p 9090 --mode longline   (16 MiB, no newline)
-  $ ps -o pid,ppid,stat,rss,cmd --ppid 1858
-        PID    PPID STAT   RSS CMD
-       1860    1858 S+   17808 ./server -p 9090 --no-validate
-    RESULT: sent all 16 MiB without a newline, waiting for the server
-    (no reply after 1.5 s: the test ends the client)
+  (a) $ ./client -p 9090 --mode longline   (16 MiB, no newline)
+      after 1.5 s the child is still reading: RSS 17844 KiB
+      RESULT: sent all 16 MiB without a newline, waiting for the server
+  (b) $ ./client -p 9090 -r "WATCH 4294967297 100"   (2^32 + 1)
+      OK seq=1 pid=18885 host=LAPTOP-0F0NVT4H up=0d 22:04:05 load=0.00/0.04/0.00 mem_avail=7.08/7.61 GiB procs=218
+  (c) $ ./client -p 9090 -r "WATCH 100 0"   (no pause between snapshots)
+      100 snapshots in 22 ms
+  (d) $ ./client -p 9090 -r "WATCH 100000 1000"   (one snapshot a second)
+      after 1.5 s: 2 snapshot(s), the child keeps going: 100000 x 1 s = 27.8 hours
   server log:
-    | 16:03:12.071 [server:1860] WARN  no newline after 524287 bytes: request buffer grown to 1024 KiB
-    | 16:03:12.072 [server:1860] WARN  no newline after 1048575 bytes: request buffer grown to 2048 KiB
-    | 16:03:12.073 [server:1860] WARN  no newline after 2097151 bytes: request buffer grown to 4096 KiB
-    | 16:03:12.075 [server:1860] WARN  no newline after 4194303 bytes: request buffer grown to 8192 KiB
-    | 16:03:12.078 [server:1860] WARN  no newline after 8388607 bytes: request buffer grown to 16384 KiB
-    | 16:03:12.084 [server:1860] WARN  no newline after 16777215 bytes: request buffer grown to 32768 KiB
-    | 16:03:13.572 [server:1860] INFO  127.0.0.1:42206: left before sending a complete request
-    | 16:03:13.572 [server:1858] INFO  reaped child 1860: exit 3 (client left) | active=0
+    | 00:43:21.853 [server:18883] WARN  no newline after 8388607 bytes: request buffer grown to 16384 KiB
+    | 00:43:21.858 [server:18883] WARN  no newline after 16775043 bytes: request buffer grown to 32768 KiB
+    | 00:43:23.346 [server:18885] INFO  127.0.0.1:60048: WATCH 4294967297 100 -> 1 snapshot(s)
+    | 00:43:23.357 [server:18887] INFO  127.0.0.1:60062: WATCH 100 0 -> 100 snapshot(s)
+    | 00:43:23.374 [server:18889] INFO  127.0.0.1:60074: WATCH 100000 1000 -> 100000 snapshot(s)
 
 --- [3] WITH: ./server -p 9090  ---
-  $ ./client -p 9090 --mode longline   (16 MiB, no newline)
-  $ ps -o pid,ppid,stat,rss,cmd --ppid 1862
-        PID    PPID STAT   RSS CMD
-    RESULT: stopped after sending 2432 KiB of 16 MiB: the server cut us off
-    RESULT: server reply after 0.0 s: ERROR request too long
+  (a) $ ./client -p 9090 --mode longline   (16 MiB, no newline)
+      RESULT: server reply after 0.0 s: ERROR request too long
+  (b) $ ./client -p 9090 -r "WATCH 4294967297 100"   (2^32 + 1)
+      ERROR bad arguments: WATCH <count 1-100> <ms 100-10000>
+  (c) $ ./client -p 9090 -r "WATCH 100 0"   (no pause between snapshots)
+      ERROR bad arguments: WATCH <count 1-100> <ms 100-10000>
+  (d) $ ./client -p 9090 -r "WATCH 100000 1000"   (one snapshot a second)
+      ERROR bad arguments: WATCH <count 1-100> <ms 100-10000>
   server log:
-    | 16:03:13.939 [server:1864] WARN  127.0.0.1:42222: request longer than 127 bytes -> rejected
-    | 16:03:13.941 [server:1862] INFO  reaped child 1864: exit 2 (bad request) | active=0
-  [PASS] [3] without: the buffer grows to 32768 KiB, child RSS 17808 KiB
-  [PASS] [3] with: rejected after 127 bytes, the child is gone 1.5 s later
+    | 00:43:25.237 [server:18892] WARN  127.0.0.1:60080: request longer than 127 bytes -> rejected
+    | 00:43:26.737 [server:18894] WARN  127.0.0.1:60086: bad WATCH arguments "WATCH 4294967297 100" -> rejected
+    | 00:43:26.743 [server:18896] WARN  127.0.0.1:60102: bad WATCH arguments "WATCH 100 0" -> rejected
+    | 00:43:26.749 [server:18898] WARN  127.0.0.1:60106: bad WATCH arguments "WATCH 100000 1000" -> rejected
+  [PASS] [3] without (a): 16 MiB with no newline is buffered, child RSS 17844 KiB
+  [PASS] [3] without (b): WATCH 4294967297 100 is served as WATCH 1 100
+  [PASS] [3] without (c): WATCH 100 0 sends 100 snapshots in 22 ms
+  [PASS] [3] without (d): WATCH 100000 1000 keeps a child busy for 27.8 hours
+  [PASS] [3] with: all 4 requests rejected with an ERROR line
 
-==== [4] limit on connected clients ====
+==== [4] request deadline: Slowloris ====
 
---- [4] WITHOUT: ./server -p 9090 --no-limit ---
-  $ ./client -p 9090 --mode idle   x 10 (connect, send nothing)
-  server children while the 10 clients are connected: 10
-  the test ends the clients that are still waiting
-  clients answered "ERROR server busy": 0
+--- [4] WITHOUT: ./server -p 9090 --no-deadline ---
+  $ ./client -p 9090 --mode slow   x 32 (1 byte every 0.5 s, never a newline)
+  32 children, each waiting for a request line (server limit -m 32)
+  4 s later: 32 children still waiting
+  $ ./client -p 9090   (an ordinary client arrives)
+    ERROR server busy, try again later
+  slow clients that got "ERROR request timeout": 0
   server log:
-    | 16:03:15.755 [server:1866] INFO  robustness: [1] reap ON | [2] ignore SIGPIPE ON | [3] length limit ON | [4] max clients OFF | [5] pdeathsig ON
+    | 00:43:32.609 [server:18899] WARN  127.0.0.1:34610 rejected: 32 clients connected, limit 32
 
---- [4] WITH: ./server -p 9090 -m 5 ---
-  $ ./client -p 9090 --mode idle   x 10 (connect, send nothing)
-  server children while the 10 clients are connected: 5
-  the test ends the clients that are still waiting
-  clients answered "ERROR server busy": 5
+--- [4] WITH: ./server -p 9090  ---
+  $ ./client -p 9090 --mode slow   x 32 (1 byte every 0.5 s, never a newline)
+  32 children, each waiting for a request line (server limit -m 32)
+  4 s later: 0 children still waiting
+  $ ./client -p 9090   (an ordinary client arrives)
+    OK seq=1 pid=19031 host=LAPTOP-0F0NVT4H up=0d 22:04:19 load=0.00/0.04/0.00 mem_avail=7.08/7.61 GiB procs=253
+  slow clients that got "ERROR request timeout": 32
+    RESULT: after 3.0 s and 7 bytes the server replied: ERROR request timeout
   server log:
-    | 16:03:16.422 [server:1887] INFO  robustness: [1] reap ON | [2] ignore SIGPIPE ON | [3] length limit ON | [4] max clients 5 | [5] pdeathsig ON
-    | 16:03:16.477 [server:1887] WARN  127.0.0.1:52478 rejected: 5 clients connected, limit 5
-    | 16:03:16.478 [server:1887] WARN  127.0.0.1:52480 rejected: 5 clients connected, limit 5
-    | 16:03:16.479 [server:1887] WARN  127.0.0.1:52482 rejected: 5 clients connected, limit 5
-    | 16:03:16.479 [server:1887] WARN  127.0.0.1:52502 rejected: 5 clients connected, limit 5
-    | 16:03:16.480 [server:1887] WARN  127.0.0.1:52504 rejected: 5 clients connected, limit 5
-  [PASS] [4] without: 10 idle clients hold 10 children
-  [PASS] [4] with -m 5: 5 children, the other 5 clients told busy
+    | 00:43:35.695 [server:18998] WARN  127.0.0.1:34616: no complete request line within 3000 ms (got "SYSINF") -> rejected
+    | 00:43:35.698 [server:18999] WARN  127.0.0.1:34618: no complete request line within 3000 ms (got "SYSINFO") -> rejected
+    | 00:43:35.699 [server:19000] WARN  127.0.0.1:34628: no complete request line within 3000 ms (got "SYSINFO") -> rejected
+    | ... and 29 more line(s) like these
+  [PASS] [4] without: 32 slow clients hold all 32 children, the next client is told busy
+  [PASS] [4] with: all 32 cut off after 3 s, the next client is served
 
-==== [5] children die with the parent (PR_SET_PDEATHSIG) ====
+==== [5a] parent killed: children die with it (PR_SET_PDEATHSIG) ====
 
---- [5] WITHOUT: ./server -p 9090 --no-pdeathsig ---
+--- [5a] WITHOUT: ./server -p 9090 --no-pdeathsig ---
   $ ./client -p 9090 -n 10 -w 300   (10 snapshots in 3 s)
-  $ ps -o pid,ppid,stat,rss,cmd --ppid 1903
+  $ ps -o pid,ppid,stat,rss,cmd --ppid 19032
         PID    PPID STAT   RSS CMD
-       1905    1903 S+    1820 ./server -p 9090 --no-pdeathsig
-  $ kill -9 1903   (the parent server crashes)
-  child 1905 still running: STAT S, PPID 1632 (was 1903) -> orphan
+      19034   19032 S+    1800 ./server -p 9090 --no-pdeathsig
+  $ kill -9 19032   (the parent server crashes)
+  child 19034 still running: STAT S, PPID 18765 (was 19032) -> orphan
   the client received 10 of 10 snapshots
 
---- [5] WITH: ./server -p 9090  ---
+--- [5a] WITH: ./server -p 9090  ---
   $ ./client -p 9090 -n 10 -w 300   (10 snapshots in 3 s)
-  $ ps -o pid,ppid,stat,rss,cmd --ppid 1907
+  $ ps -o pid,ppid,stat,rss,cmd --ppid 19036
         PID    PPID STAT   RSS CMD
-       1909    1907 S+    1728 ./server -p 9090
-  $ kill -9 1907   (the parent server crashes)
-  child 1909 is gone: the kernel sent it SIGTERM when the parent died
+      19038   19036 S+    1824 ./server -p 9090
+  $ kill -9 19036   (the parent server crashes)
+  child 19038 is gone: the kernel sent it SIGTERM when the parent died
   the client received 3 of 10 snapshots
-    16:03:20.703 [client:1908] WARN  after 3 reply line(s): the server closed the connection
-  [PASS] [5] without: the child outlives the parent as an orphan and sends all 10
-  [PASS] [5] with: the child ends with the parent (3 of 10 sent)
+    00:43:40.317 [client:19037] WARN  after 3 reply line(s): the server closed the connection
+  [PASS] [5a] without: the child outlives the parent as an orphan and sends all 10
+  [PASS] [5a] with: the child ends with the parent (3 of 10 sent)
+
+==== [5b] Ctrl+C: graceful shutdown ====
+
+--- [5b] WITHOUT: ./server -p 9090 --no-graceful ---
+  $ ./client -p 9090 -n 10 -w 300   (10 snapshots in 3 s)
+  $ kill -INT -19040   (Ctrl+C: SIGINT to the server's whole process group)
+  $ ./client -p 9090   (a new client, 0.2 s after Ctrl+C)
+    00:43:41.679 [client:19043] ERROR cannot connect to 127.0.0.1:9090: Connection refused
+  the running client received 3 of 10 snapshots
+    00:43:41.470 [client:19041] WARN  after 3 reply line(s): the server closed the connection
+  server: killed by signal 2 (Interrupt), 0.2 s after Ctrl+C
+  server log:
+    | 00:43:40.628 [server:19040] INFO  robustness: [4] request deadline ON | [5a] pdeathsig ON | [5b] graceful Ctrl+C OFF
+
+--- [5b] WITH: ./server -p 9090  ---
+  $ ./client -p 9090 -n 10 -w 300   (10 snapshots in 3 s)
+  $ kill -INT -19044   (Ctrl+C: SIGINT to the server's whole process group)
+  $ ./client -p 9090   (a new client, 0.2 s after Ctrl+C)
+    00:43:42.741 [client:19047] ERROR cannot connect to 127.0.0.1:9090: Connection refused
+  the running client received 10 of 10 snapshots
+  server: exit 0, 1.9 s after Ctrl+C
+  server log:
+    | 00:43:41.692 [server:19044] INFO  robustness: [4] request deadline ON | [5a] pdeathsig ON | [5b] graceful Ctrl+C ON
+    | 00:43:42.536 [server:19044] INFO  Ctrl+C: no new clients; waiting for 1 child(ren) to finish (at most 30 s, Ctrl+C again to quit now)
+    | 00:43:44.446 [server:19044] INFO  reaped child 19046: exit 0 (request served) | active=0
+    | 00:43:44.447 [server:19044] INFO  all children finished -> server exits
+  [PASS] [5b] without: Ctrl+C kills the server and the child at once (3 of 10 sent)
+  [PASS] [5b] with: new clients refused, the running one gets all 10, then exit 0
 
 ==============================================================================
  With / Without summary
 ==============================================================================
-  mechanism           | WITHOUT (switched off)             | WITH (default)
-  --------------------+------------------------------------+-------------------------------
-  [1] reap children   | 3 zombies <defunct>                | 0 zombies, 3 reaped
-  [2] ignore SIGPIPE  | child killed by signal 13          | EPIPE handled, child exit 3
-  [3] length limit    | buffer 32768 KiB, RSS 17808 KiB    | rejected after 127 bytes
-  [4] max clients     | 10 children for 10 idle clients    | 5 children, 5 told busy
-  [5] pdeathsig       | orphan runs on (PPID 1632), 10/10  | child ends with parent, 3/10
+  mechanism             | WITHOUT (switched off)                     | WITH (default)
+  ----------------------+--------------------------------------------+-------------------------------------
+  [1] waitpid loop      | 10 of 12 zombies, parent: active=10        | 12 of 12 reaped, 0 zombies
+  [2a] ignore SIGPIPE   | child killed by signal 13                  | EPIPE handled, child exit 3
+  [2b] TCP_USER_TIMEOUT | writes on 9.0 s, "served", client got 2/20 | ETIMEDOUT 4.0 s after the cut, exit 3
+  [3] validation        | 4 of 4 accepted, child RSS 17844 KiB       | 4 of 4 rejected with ERROR
+  [4] request deadline  | 32 slow clients hold 32 slots, next: busy  | 32 cut off at 3 s, next client served
+  [5a] pdeathsig        | orphan runs on (PPID 18765), 10/10         | child ends with parent, 3/10
+  [5b] graceful Ctrl+C  | client cut off at 3/10                     | 10/10 delivered, exit 0 after 1.9 s
 
 ==============================================================================
  Result

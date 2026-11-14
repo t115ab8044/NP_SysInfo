@@ -29,7 +29,7 @@ Client 連到 server，用一行文字請求查詢主機的即時系統資訊：
 | 雙層 Debug | 編譯期 `-DENABLE_DEBUG`（關閉時巨集展開成 `((void)0)`），加上執行期 `-d 0/1/2` |
 | 共用函式封裝成 `.so`，兩邊都連結 | logger、`write_all`／`read_line`、系統資訊擷取都在 `libutils.so`，server 和 client 都以 `-lutils` 動態連結 |
 | Client 向 server 請求系統資訊 | `SYSINFO` 查一次，`WATCH <次數> <毫秒>` 連續回報 |
-| 穩健機制，至少 3 個 With/Without 執行範例 | 5 個機制、5 組 With/Without 對照（[第 5 節](#5-五個穩健機制)），每個機制都能用參數關閉，由 `tests/test_robustness.c` 自動跑出對照 |
+| 穩健機制，至少 3 個 With/Without 執行範例 | 5 類異常、7 個機制、7 組 With/Without 對照（[第 5 節](#5-七個穩健機制)），每個機制都能用參數關閉，由 `tests/test_robustness.c` 自動跑出對照 |
 | 使用 Makefile 建置 | `Makefile` 提供建置、展示與測試的 target |
 
 ---
@@ -42,13 +42,13 @@ Client 連到 server，用一行文字請求查詢主機的即時系統資訊：
 .
 ├── Makefile             建置 libutils.so、server、client，以及測試 target
 ├── utils.h / utils.c    libutils.so：logger、socket I/O、系統資訊、雜項工具
-├── server.c             fork 多進程 server，5 個穩健機制可個別關閉
-├── client.c             client：查詢、連續回報、3 種故障模擬
+├── server.c             fork 多進程 server，7 個穩健機制可個別關閉
+├── client.c             client：查詢、連續回報、4 種故障模擬
 ├── tests/               C 測試程式
 │   ├── testlib.h / testlib.c   共用函式：fork + exec、regex 過濾、讀取 /proc
 │   ├── demo.c                  一個指令的現場展示（約 3 秒）
 │   ├── test_concurrent.c       12 個 client 併發證明
-│   ├── test_robustness.c       5 組穩健機制的 With/Without 對照
+│   ├── test_robustness.c       7 組穩健機制的 With/Without 對照
 │   ├── test_debug.c            雙層 Debug 證明（編譯期與執行期）
 │   ├── test_capture.c          tcpdump 抓包與標頭分析
 │   └── win_client.c            Real Test 用的 Windows client（Winsock）
@@ -69,7 +69,7 @@ Client 連到 server，用一行文字請求查詢主機的即時系統資訊：
  client N ◄═════════════════════► child (pid N)
 ```
 
-- **parent：** 只負責 `accept()`、`fork()` 和回收子進程。唯一會寫入 client 的情況，是連線數達上限時直接回 `ERROR server busy`（機制 [4]）。
+- **parent：** 只負責 `accept()`、`fork()` 和回收子進程。唯一會寫入 client 的情況，是連線數達上限（`-m`，預設 32）時直接回 `ERROR server busy`。
 - **child：** 讀一行請求、回覆、`_exit()`。連線建立後，請求和回覆直接在 client 和 child 之間傳送，不經過 parent。exit code 代表結束原因，parent 回收時寫進 log。
 
 ### libutils.so 模組
@@ -77,17 +77,17 @@ Client 連到 server，用一行文字請求查詢主機的即時系統資訊：
 | 模組 | 函式 | 說明 |
 |---|---|---|
 | Logger | `log_init`、`log_write`、`log_hexdump`、`LOG_INFO/WARN/ERROR`、`LOG_DEBUG`、`LOG_HEXDUMP`、`g_runtime_debug_level` | 每行格式為 `HH:MM:SS.mmm [tag:pid] LEVEL msg`，整行只用一次 `write()` 輸出，多個進程同時寫也不會交錯 |
-| Socket I/O | `write_all`、`read_line` | `write_all` 補完 short write、遇到 `EINTR` 重試；`read_line` 一次讀 1 byte，最多讀 127 bytes（機制 [3]） |
+| Socket I/O | `write_all`、`read_line`、`read_line_timeout` | `write_all` 補完 short write、遇到 `EINTR` 重試；`read_line` 一次讀 1 byte，最多讀 127 bytes（機制 [3]）；`read_line_timeout` 再加上整行的期限（機制 [4]） |
 | 系統資訊 | `sysinfo_collect`、`sysinfo_format` | 資料來源是 `gethostname`、`sysinfo(2)`、`getloadavg`、`/proc/meminfo`，格式化成一行 `OK ...` |
 | 其他 | `parse_int_range`、`sleep_ms`、`set_signal` | 命令列整數解析、被 signal 中斷後會繼續睡的 sleep、用 `sigaction` 設定 signal |
 
-`libutils.so` 共匯出 11 個符號，可用 `make inspect` 查看。
+`libutils.so` 共匯出 12 個符號，可用 `make inspect` 查看。
 
 ---
 
 ## 2. 建置
 
-**需求：** Linux（本專案在 WSL2 Ubuntu 上測試）、gcc、GNU make。測試程式另外會用到 `ps`、`strings`、`objdump`、`size`、`tcpdump`。
+**需求：** Linux（本專案在 WSL2 Ubuntu 上測試）、gcc、GNU make。測試程式另外會用到 `ps`、`strings`、`objdump`、`size`、`tcpdump`，以及 `tc`（iproute2，機制 [2b] 的測試用來切斷網路）。
 
 ```bash
 make
@@ -129,7 +129,7 @@ Client 送出一行文字，server 回覆一行或多行文字，每行以 `\n` 
 |---|---|
 | `SYSINFO` | 一行 `OK seq=1 ...`，然後關閉連線 |
 | `WATCH <count> <ms>` | 每隔 `<ms>` 毫秒一行，共 `<count>` 行（count 1–100，ms 100–10000） |
-| 其他內容、參數超出範圍、超過 127 bytes | 一行 `ERROR <原因>`，然後關閉連線 |
+| 其他內容、參數超出範圍、超過 127 bytes、3 秒內沒送完一行 | 一行 `ERROR <原因>`，然後關閉連線 |
 
 ```text
 OK seq=1 pid=556 host=LAPTOP-0F0NVT4H up=0d 00:00:30 load=0.11/0.03/0.01 mem_avail=7.09/7.61 GiB procs=231
@@ -140,17 +140,20 @@ OK seq=1 pid=556 host=LAPTOP-0F0NVT4H up=0d 00:00:30 load=0.11/0.03/0.01 mem_ava
 ### 3.2 Server
 
 ```bash
-./server                    # 監聽 0.0.0.0:9090，5 個機制全開
+./server                    # 監聽 0.0.0.0:9090，7 個機制全開
 ./server -p 9000 -d 1       # 改用 port 9000，開啟流程 debug
-./server --no-sigchld       # 關閉機制 [1]，示範殭屍進程
+./server --reap-once        # 關閉機制 [1]，示範同時斷線留下的殭屍
 ```
 
 | 參數 | 說明 |
 |---|---|
 | `-p, --port PORT` | 監聽的 port（預設 9090） |
 | `-d, --debug LEVEL` | 執行期 debug 等級：0 一般訊息，1 加上流程，2 再加上 hex dump |
-| `-m, --max-clients N` | 機制 [4]：同時服務的 client 上限（預設 32） |
-| `--no-sigchld`、`--no-sigpipe`、`--no-validate`、`--no-limit`、`--no-pdeathsig` | 分別關閉機制 [1]～[5]，用於 With/Without 對照 |
+| `-m, --max-clients N` | 同時服務的 client 上限（預設 32），超過時 parent 直接回 `ERROR server busy`、不 fork |
+| `--no-limit` | 不限制同時服務的 client 數量 |
+| `--reap-once`、`--no-sigpipe`、`--no-user-timeout`、`--no-validate`、`--no-deadline`、`--no-pdeathsig`、`--no-graceful` | 分別關閉機制 [1]、[2a]、[2b]、[3]、[4]、[5a]、[5b]，用於 With/Without 對照（[第 5 節](#5-七個穩健機制)） |
+
+在終端機按 `Ctrl+C` 時，server 不再接受新連線，等正在服務的子進程做完才結束（最多 30 秒）；再按一次就立刻結束（機制 [5b]）。
 
 子進程的 exit code 由 parent 回收時記錄，例如 `reaped child 795: exit 3 (client left)`：
 
@@ -159,7 +162,8 @@ OK seq=1 pid=556 host=LAPTOP-0F0NVT4H up=0d 00:00:30 load=0.11/0.03/0.01 mem_ava
 | 0 | 請求處理完成 |
 | 1 | I/O 錯誤 |
 | 2 | 請求被拒絕（太長、未知的指令、參數錯誤） |
-| 3 | client 已經離開（寫入時收到 `EPIPE`，或還沒送完請求就斷線） |
+| 3 | client 已經離開（寫入時收到 `EPIPE`、`ETIMEDOUT`，或還沒送完請求就斷線） |
+| 4 | 請求逾時（3 秒內沒有送完一行） |
 
 子進程如果是被 signal 殺掉的，log 會顯示 `killed by signal 13 (Broken pipe)`。
 
@@ -178,7 +182,7 @@ OK seq=1 pid=556 host=LAPTOP-0F0NVT4H up=0d 00:00:30 load=0.11/0.03/0.01 mem_ava
 | `-H, --host HOST` | server 位址（預設 127.0.0.1） |
 | `-p, --port PORT` | server port（預設 9090） |
 | `-d, --debug LEVEL` | 執行期 debug 等級 0/1/2 |
-| `-n, --count N`、`-w, --interval MS` | 改送 `WATCH N MS`（預設 5 次、1000 ms） |
+| `-n, --count N`、`-w, --interval MS` | 改送 `WATCH N MS`（預設 5 次、1000 ms）；`slow` 模式下 `-w` 是兩個 byte 的間隔（預設 500 ms） |
 | `-r, --request LINE` | 把 LINE 當成請求送出 |
 | `--half-close` | 送完請求後呼叫 `shutdown(fd, SHUT_WR)`：只關閉送出的方向（送出 FIN），仍然繼續讀取回覆 |
 | `--mode MODE` | 故障模擬，見下表 |
@@ -186,11 +190,12 @@ OK seq=1 pid=556 host=LAPTOP-0F0NVT4H up=0d 00:00:30 load=0.11/0.03/0.01 mem_ava
 
 | 故障模式 | 行為 | 用來測試 |
 |---|---|---|
-| `abort` | 送出 `WATCH 10 200`，收到第 1 行就斷線 | 機制 [2]：SIGPIPE |
-| `longline` | 送出 16 MiB 都不換行的請求，然後等 server 回應 | 機制 [3]：請求長度上限 |
-| `idle` | 連上後什麼都不送，一直佔住連線 | 機制 [4]：連線上限 |
+| `abort` | 送出 `WATCH 10 200`，收到第 1 行就斷線 | 機制 [2a]：SIGPIPE |
+| `longline` | 送出 16 MiB 都不換行的請求，然後等 server 回應 | 機制 [3]：請求驗證 |
+| `slow` | Slowloris：每 0.5 秒送 1 byte 的 `SYSINFO`，永遠不送換行（送完後改送空白） | 機制 [4]：請求期限 |
+| `idle` | 連上後什麼都不送，一直佔住連線 | 機制 [1]：讓 12 個子進程同時等待，再一起斷線 |
 
-Client 沒有逾時，會一直等到 server 回覆或關閉連線；要提早結束就按 `Ctrl+C`。測試程式會自己結束 `longline` 和 `idle` 的 client。
+Client 沒有逾時，會一直等到 server 回覆或關閉連線；要提早結束就按 `Ctrl+C`。測試程式會自己結束 `longline`、`slow` 和 `idle` 的 client。
 
 Client 的 exit code：0 成功，1 失敗或收到 `ERROR`，2 連線在收到任何回覆前就結束。
 
@@ -224,49 +229,69 @@ DEBUG     0000  53 59 53 49 4e 46 4f 0a                           |SYSINFO.|
 
 ---
 
-## 5. 五個穩健機制
+## 5. 七個穩健機制
 
-每個機制都可以用參數單獨關閉，由 `tests/test_robustness.c` 自動跑 Without 和 With 兩種情況並比較。
+5 類異常，共 7 個機制。每個機制都可以用參數單獨關閉，由 `tests/test_robustness.c` 自動跑 Without 和 With 兩種情況並比較。
 
 | # | 異常情況 | 機制 | 關閉參數 |
 |---|---|---|---|
-| [1] | 子進程結束後沒人回收，變成殭屍 | SIGCHLD handler 內以迴圈呼叫 `waitpid(WNOHANG)` | `--no-sigchld` |
-| [2] | 寫入已經離開的 client，子進程被 SIGPIPE 殺掉 | 忽略 SIGPIPE，處理 `write()` 回傳的 `EPIPE` | `--no-sigpipe` |
-| [3] | 不換行的超長請求讓子進程記憶體一直長大 | 請求最多 127 bytes，超過就回 `ERROR request too long` | `--no-validate` |
-| [4] | 大量連線讓 server 產生無限多個子進程 | 同時服務的 client 上限，超過時 parent 直接回 `ERROR server busy`、不 fork | `--no-limit` |
-| [5] | parent 被 `kill -9` 後，子進程變成孤兒繼續執行 | `prctl(PR_SET_PDEATHSIG, SIGTERM)` | `--no-pdeathsig` |
+| [1] | 12 個 client 同時斷線，12 個子進程同時結束 | SIGCHLD handler 內以迴圈呼叫 `waitpid(WNOHANG)`，一次收完 | `--reap-once` |
+| [2a] | client 正常關閉後，子進程還在寫，被 SIGPIPE 殺掉 | 忽略 SIGPIPE，處理 `write()` 回傳的 `EPIPE` | `--no-sigpipe` |
+| [2b] | client 的網路突然消失（像是進了電梯的手機），沒有送出 FIN 或 RST | `TCP_USER_TIMEOUT`：送出的資料 3 秒沒有 ACK 就放棄連線 | `--no-user-timeout` |
+| [3] | 惡意請求：16 MiB 不換行、會溢位的數字、0 毫秒的間隔、要跑 27.8 小時的請求 | 長度上限 127 bytes、限定欄寬的 `%3d %5d`、範圍檢查 | `--no-validate` |
+| [4] | Slowloris：每 0.5 秒送 1 byte、永遠送不完，佔滿 32 個名額 | 整行請求必須在 3 秒內送完 | `--no-deadline` |
+| [5a] | parent 被 `kill -9`，子進程變成孤兒繼續執行 | `prctl(PR_SET_PDEATHSIG, SIGTERM)` | `--no-pdeathsig` |
+| [5b] | 在終端機按 `Ctrl+C`，正在看 `WATCH` 的 client 被切斷 | 優雅關閉：停止接受新連線，等子進程做完再結束 | `--no-graceful` |
 
-[1] 和 [5] 剛好是一組：殭屍是「child 死了、parent 沒收」，孤兒是「parent 死了、child 還在」。
+這些機制兩兩成對：[1] 和 [5a] 一個是「child 死了、parent 沒收」（殭屍），一個是「parent 死了、child 還在」（孤兒）；[2a] 和 [2b] 都是 client 中途離開，差別在 client 有沒有機會通知 server；[5a] 和 [5b] 都是 server 結束，一個是被殺，一個是有人要它停下來。
 
-### [1] SIGCHLD + `waitpid` 迴圈
+### [1] SIGCHLD + `waitpid` 迴圈：signal 不排隊
 
-- **問題：** 子進程結束後，如果 parent 不呼叫 `wait`，它會一直以 `<defunct>` 狀態佔用 process table。
-- **作法：** 用 `sigaction` 註冊 SIGCHLD handler，在 handler 裡以 `while (waitpid(-1, &status, WNOHANG) > 0)` 回收。signal 不會排隊，多個子進程同時結束可能只收到一次 SIGCHLD，所以一定要用迴圈。handler 只把 PID 和 status 存進 ring buffer，log 由 main loop 輸出，因為 `printf()` 不能在 signal handler 裡使用。
-- **關閉後：** SIGCHLD 維持預設動作，結束的子進程全部變成殭屍。
+- **問題：** 子進程結束時，kernel 送 SIGCHLD 給 parent。但 signal 不會排隊：SIGCHLD 還沒處理時又有子進程結束，只是把同一個 pending 位元再設一次。12 個 client 同時斷線，parent 可能只收到 2、3 次 SIGCHLD。
+- **作法：** handler 裡以 `while (waitpid(-1, &status, WNOHANG) > 0)` 一次收完所有已經結束的子進程，不管這次 SIGCHLD 代表幾個。handler 只把 PID 和 status 存進 ring buffer，log 由 main loop 輸出，因為 `printf()` 不能在 signal handler 裡使用。
+- **關閉後（`--reap-once`）：** 改成常見的錯誤寫法，每次 SIGCHLD 只呼叫一次 `waitpid`。測試中 12 個子進程只回收 2 個，另外 10 個變成 `<defunct>`；parent 的計數停在 `active=10`，以為那些 client 還連著，這 10 個名額不會再回來。
 
-### [2] 忽略 SIGPIPE
+### [2a] 忽略 SIGPIPE：client 正常離開
 
-- **問題：** 對已經關閉的連線呼叫 `write()` 會觸發 SIGPIPE，預設動作是直接終止進程，沒有任何錯誤處理。
+- **問題：** client 關閉連線後，子進程再 `write()` 會觸發 SIGPIPE，預設動作是直接終止進程，沒有任何錯誤處理。
 - **作法：** parent 啟動時設定 `SIGPIPE` 為 `SIG_IGN`，子進程透過 `fork()` 繼承。之後 `write()` 改成回傳 -1、errno 為 `EPIPE`，子進程記錄 `client left` 後以 exit 3 結束。
 - **關閉後：** 子進程被 signal 13 殺掉。不論開或關，parent 都不受影響，能繼續服務新的 client。
 
-### [3] 請求長度上限
+### [2b] `TCP_USER_TIMEOUT`：client 的網路突然消失
 
-- **問題：** 如果 server 一直讀到 `\n` 為止，client 只要不送換行，就能讓子進程的緩衝區無限長大。
-- **作法：** `read_line()` 一次讀 1 byte，讀滿 127 bytes 還沒看到 `\n` 就停止，回覆 `ERROR request too long` 並結束。
-- **關閉後：** 改用不限長度的讀法，緩衝區每次加倍。16 MiB 的請求讓緩衝區長到 32 MiB，子進程的 RSS 約 17 MiB。
+- **問題：** client 正常關閉時，kernel 會送出 FIN，server 很快就知道（[2a]）。但手機進了電梯、Wi-Fi 斷線或網路線被拔掉時，什麼封包都不會送出。這時 `write()` 只是把資料複製到 kernel 的送出緩衝區，照樣成功；子進程以為一切正常，對著已經不在的 client 一直送。
+- **作法：** 子進程在連線上設定 `setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, 3000)`：已送出的資料超過 3 秒沒有收到 ACK，kernel 就放棄這條連線，下一次 `write()` 回傳 `ETIMEDOUT`，子進程記錄 `client unreachable` 後以 exit 3 結束。
+- **關閉後：** 測試在 client 收到 2 筆後，用 `tc qdisc add dev lo root netem loss 100%` 丟掉所有封包。子進程又「送」了 9 秒，把 20 筆全部送完，log 寫著 `exit 0 (request served)`，但 client 只收到 2 筆。開啟時，子進程在斷線 4.0 秒後收到 `ETIMEDOUT` 並停止。
+- **測試環境：** `tc` 需要 root 權限。測試程式先用 `unshare(CLONE_NEWUSER | CLONE_NEWNET)` 建立自己的 network namespace（和 `unshare -rn` 相同，不需要 root），只在裡面的 loopback 上操作，不會影響系統的網路。
 
-### [4] 連線上限
+### [3] 請求驗證：四種惡意請求
 
-- **問題：** 每個連線都 fork，代表只要大量連線，就能讓 server 產生無限多個進程。連上後不送資料的 client 也會一直佔著子進程。
-- **作法：** parent 記錄還沒回收的子進程數量。達到上限（`-m`，預設 32）時，parent 用 `send(..., MSG_DONTWAIT | MSG_NOSIGNAL)` 直接回 `ERROR server busy` 後關閉，不 fork。這兩個 flag 讓 parent 不會因為 client 而卡住或被 SIGPIPE 殺掉。
-- **關閉後：** 10 個閒置的 client 佔住 10 個子進程。
+- **問題：** 請求來自網路，什麼內容都可能出現。測試對同一個 server 送出 4 個請求：
+  - (a) 16 MiB 都不換行：如果一直讀到 `\n` 為止，緩衝區就會無限長大。
+  - (b) `WATCH 4294967297 100`：`sscanf` 的 `%d` 不檢查溢位，glibc 只留下低 32 位元，4294967297（2^32 + 1）變成 1。
+  - (c) `WATCH 100 0`：沒有範圍檢查時，0 毫秒的間隔讓 100 行一次湧出。
+  - (d) `WATCH 100000 1000`：一個請求佔住子進程 100000 秒，約 27.8 小時。
+- **作法：** `read_line()` 最多讀 127 bytes；`sscanf(line, "%15s %3d %5d %1s", ...)` 用欄寬限制數字的位數，`%1s` 抓出多餘的內容；count 必須在 1–100，間隔必須在 100–10000 ms。不合格的請求回覆 `ERROR` 後結束。
+- **關閉後：** 改用不限長度的讀法，以及沒有欄寬、沒有範圍檢查的 `%d`，4 個請求全部被接受：(a) 緩衝區加倍到 32 MiB，子進程 RSS 約 17 MiB；(b) 被當成 `WATCH 1 100`；(c) 22 ms 內送出 100 行；(d) 1.5 秒後子進程還在送。
 
-### [5] 子進程跟著 parent 結束
+### [4] 請求期限：Slowloris
+
+- **問題：** Slowloris 攻擊每隔一段時間送 1 byte，連線一直有動靜，請求卻永遠送不完。每條這樣的連線都佔住一個子進程，32 條就佔滿 `-m 32` 的上限，正常的 client 只能收到 `ERROR server busy`。只限制「兩次 read 之間」的等待時間擋不住它，因為每個 byte 都很快就到。
+- **作法：** 整行請求有一個總期限：子進程開始讀請求後，3 秒內必須讀到 `\n`。`read_line_timeout()` 每讀一個 byte 前，用 `poll()` 等「剩下的時間」，client 送得再慢也無法延長期限。逾時就回覆 `ERROR request timeout`，以 exit 4 結束。
+- **關閉後：** 32 個 `--mode slow` 的 client 在 4 秒後仍然佔住 32 個子進程，第 33 個正常的 client 收到 `ERROR server busy`。開啟時，32 個在第 3 秒全部被切斷，正常的 client 隨後得到服務。
+
+### [5a] 子進程跟著 parent 結束
 
 - **問題：** `SIGKILL` 無法攔截，parent 被 `kill -9` 時來不及通知子進程。子進程會被過繼給其他進程（WSL2 上是該 session 的 `/init`，不一定是 PID 1），繼續執行，沒有人管理。
 - **作法：** 子進程在 fork 後呼叫 `prctl(PR_SET_PDEATHSIG, SIGTERM)`，parent 一死，kernel 就送 `SIGTERM` 給它。設定後再檢查一次 `getppid()`，處理 parent 在 fork 和 `prctl` 之間就死掉的情況。
-- **關閉後：** 子進程的 PPID 從 parent 變成別的進程（log 中從 1903 變成 1632），繼續把 10 筆資料送完。
+- **關閉後：** 子進程的 PPID 從 parent 變成別的進程，繼續把 10 筆資料送完。
+
+### [5b] `Ctrl+C` 優雅關閉
+
+- **問題：** 在終端機按 `Ctrl+C` 時，SIGINT 會送給整個前景 process group，parent 和所有子進程一起被殺，正在看 `WATCH` 的 client 被切斷。
+- **作法：** parent 註冊 SIGINT handler，子進程把 SIGINT 設成 `SIG_IGN`，由 parent 決定什麼時候結束。第一次 `Ctrl+C` 時，handler 直接 `close()` 監聽 socket（`close` 是 async-signal-safe）：新的 client 立刻收到 connection refused，而且 signal 就算剛好落在 `accept()` 之前也不會漏掉。接著 parent 用 `waitpid()` 等正在服務的子進程做完，再以 exit 0 結束。
+- **和 [5a] 的配合：** parent 在等待時還活著，所以 pdeathsig 不會提早殺掉子進程。最多等 30 秒（`alarm`），或再按一次 `Ctrl+C`，parent 就直接結束，剩下的子進程由 [5a] 的 pdeathsig 收掉。`kill`（SIGTERM）不走優雅關閉，parent 會立即結束。
+- **關閉後：** client 只收到 10 筆中的 3 筆就被切斷，server 被 signal 2 殺掉。開啟時新的 client 被拒絕，正在服務的 client 收到全部 10 筆，server 在 `Ctrl+C` 後 1.9 秒以 exit 0 結束。
 
 ---
 
@@ -277,7 +302,7 @@ DEBUG     0000  53 59 53 49 4e 46 4f 0a                           |SYSINFO.|
 | 測試程式 | 證明內容 | 執行方式 | 結果 |
 |---|---|---|---|
 | `tests/test_concurrent.c` | 12 個 client 同時連線、各送出不同的請求，每條連線由不同的子進程處理 | `make test-concurrent` | 9/9 PASS |
-| `tests/test_robustness.c` | 5 個穩健機制的 With/Without 對照 | `make test-robust` | 11/11 PASS |
+| `tests/test_robustness.c` | 7 個穩健機制的 With/Without 對照 | `make test-robust` | 18/18 PASS |
 | `tests/test_debug.c` | 編譯期與執行期的雙層 Debug | `make test-debug` | 15/15 PASS |
 | `tests/test_capture.c` | tcpdump 抓包、三向交握、SYN 過濾、標頭欄位、半關閉 | `make test-capture`（需要 root 或 sudo） | 12/12 PASS |
 
@@ -317,27 +342,31 @@ client 結束後，列出每個 client 的請求、收到幾筆、由哪個 chil
 - **PID 交叉比對：** 12 個 client 收到的 `pid=` 互不相同，而且都出現在 ps 快照中。
 - **結束後：** 0 個殭屍、0 個殘留子進程；server log 記錄 12 筆 accepted、12 筆 reaped。
 
-### 6.2 test_robustness：五組 With/Without 對照
+### 6.2 test_robustness：七組 With/Without 對照
 
-以下數字來自 `logs/test_robustness.log`。
+以下數字來自 `logs/test_robustness.log`。測試程式一開始就進入自己的 network namespace（見 [2b]），所以不會和系統上正在跑的 server 搶 port。
 
 | 機制 | 測試情境 | Without（關閉） | With（預設） |
 |---|---|---|---|
-| [1] 回收子進程 | 3 個 client 依序查詢 | **3 個** `[server] <defunct>` 殭屍 | 0 個殭屍，log 記錄 3 筆回收 |
-| [2] 忽略 SIGPIPE | `--mode abort`：收到 1 行就斷線 | 子進程 `killed by signal 13 (Broken pipe)` | `client left before snapshot 3/10`，子進程 exit 3 |
-| [3] 長度上限 | `--mode longline`：16 MiB 不換行 | 緩衝區長到 **32768 KiB**，子進程 RSS **17808 KiB** | 讀到 127 bytes 就回 `ERROR request too long` |
-| [4] 連線上限 | 10 個 `--mode idle` client 同時連線 | **10 個**子進程 | 5 個子進程，另外 5 個 client 收到 `ERROR server busy` |
-| [5] pdeathsig | `WATCH 10 300` 進行中 `kill -9` parent | 子進程變成**孤兒**（PPID 改變），10 筆全部送完 | 子進程跟著結束，client 只收到 3/10 筆 |
+| [1] waitpid 迴圈 | 12 個 `--mode idle` client 同時被 `kill -9` | 只回收 2 個，**10 個** `<defunct>` 殭屍，parent 仍記著 `active=10` | 12 個全部回收，0 個殭屍 |
+| [2a] 忽略 SIGPIPE | `--mode abort`：收到 1 行就斷線 | 子進程 `killed by signal 13 (Broken pipe)` | `client left before snapshot 3/10`，子進程 exit 3 |
+| [2b] TCP_USER_TIMEOUT | `WATCH 20 500` 收到 2 筆後，用 `tc netem loss 100%` 丟掉所有封包 | 子進程又送了 **9.0 秒**，log 寫 `exit 0 (request served)`，client 只收到 2/20 筆 | 斷線 **4.0 秒**後 `write()` 回傳 `ETIMEDOUT`，子進程 exit 3 |
+| [3] 請求驗證 | 4 個惡意請求（見第 5 節） | **4 個都被接受**：RSS 17844 KiB、4294967297 變成 1、100 行只花 22 ms、要跑 27.8 小時的請求 | 4 個都收到 `ERROR` |
+| [4] 請求期限 | 32 個 `--mode slow` client，4 秒後再來 1 個正常的 client | 32 個子進程仍被佔住，正常的 client 收到 `ERROR server busy` | 32 個在第 3 秒收到 `ERROR request timeout`，正常的 client 得到服務 |
+| [5a] pdeathsig | `WATCH 10 300` 進行中 `kill -9` parent | 子進程變成**孤兒**（PPID 改變），10 筆全部送完 | 子進程跟著結束，client 只收到 3/10 筆 |
+| [5b] 優雅關閉 | `WATCH 10 300` 進行中，對 server 的 process group 送 SIGINT（等同 `Ctrl+C`） | server 和子進程立刻被殺，client 只收到 **3/10** 筆 | 新的連線被拒絕，client 收到 **10/10** 筆，server 在 1.9 秒後 exit 0 |
 
 **手動展示：** 開兩個終端機視窗，A 跑 server，B 跑 client。
 
 | 機制 | A 視窗 | B 視窗 | 觀察重點 |
 |---|---|---|---|
-| [1] | `./server --no-sigchld` | `./client` 執行 3 次，再 `ps -o pid,stat,cmd --ppid <parent PID>` | 3 個 `Z` 狀態的 `<defunct>` |
-| [2] | `./server --no-sigpipe` 與 `./server` | `./client --mode abort` | A 的 log：`killed by signal 13` 與 `exit 3 (client left)` |
-| [3] | `./server --no-validate` 與 `./server` | `./client --mode longline` | A 的 log：`buffer grown to ... KiB` 與 `request too long` |
-| [4] | `./server -m 2` | 開 3 個 `./client --mode idle &`，看完再 `pkill -x client` | 第 3 個立刻收到 `ERROR server busy` |
-| [5] | `./server --no-pdeathsig` 與 `./server` | `./client -n 20 -w 500`，再 `kill -9 <parent PID>` | client 是否繼續收到資料 |
+| [1] | `./server --reap-once` 與 `./server` | `for i in $(seq 12); do ./client --mode idle & done`，1 秒後 `pkill -KILL -x client`，再 `ps -o pid,stat,cmd --ppid <parent PID>` | 關閉時留下數個 `Z` 狀態的 `<defunct>`，開啟時一個都沒有 |
+| [2a] | `./server --no-sigpipe` 與 `./server` | `./client --mode abort` | A 的 log：`killed by signal 13` 與 `exit 3 (client left)` |
+| [2b] | `unshare -rn bash` 進入自己的 network namespace，執行 `ip link set lo up` 後，在背景啟動 `./server --no-user-timeout &` 或 `./server &` | 同一個視窗：`./client -n 20 -w 500 &`，收到 2 筆後執行 `tc qdisc add dev lo root netem loss 100%` | 關閉時約 9 秒後 log 出現 `exit 0 (request served)`；開啟時約 4 秒後出現 `client unreachable` |
+| [3] | `./server --no-validate` 與 `./server` | `./client --mode longline`、`./client -r "WATCH 4294967297 100"`、`./client -r "WATCH 100 0"`、`./client -r "WATCH 100000 1000"` | 關閉時 4 個都被接受；開啟時 4 個都收到 `ERROR` |
+| [4] | `./server --no-deadline` 與 `./server` | `for i in $(seq 32); do ./client --mode slow & done`，4 秒後執行 `./client`，看完再 `pkill -x client` | 關閉時最後的 `./client` 收到 `ERROR server busy`；開啟時 32 個在第 3 秒收到 `ERROR request timeout`，最後的 `./client` 正常收到資料 |
+| [5a] | `./server --no-pdeathsig` 與 `./server` | `./client -n 20 -w 500`，再 `kill -9 <parent PID>` | client 是否繼續收到資料 |
+| [5b] | `./server --no-graceful` 與 `./server` | `./client -n 10 -w 500`，接著在 A 視窗按 `Ctrl+C` | 關閉時 client 立刻斷線；開啟時 client 收到全部 10 筆，A 的 server 接著結束 |
 
 ### 6.3 test_debug：雙層 Debug
 
@@ -346,16 +375,16 @@ client 結束後，列出每個 client 的請求、收到幾筆、由哪個 chil
 | gcc 指令帶 `-DENABLE_DEBUG` | 0/3 | 3/3 |
 | 執行檔中的 debug 專用格式字串（`strings`） | **0** | 4 |
 | `write_all()` 內對 logger 的呼叫（`objdump -d`） | **0** | 2（`log_write@plt`） |
-| `libutils.so` text 區段大小 | 8,333 bytes | 8,741 bytes |
+| `libutils.so` text 區段大小 | 9,015 bytes | 9,423 bytes |
 | 用 `-d 2` 執行時的 DEBUG 行數 | 0，並警告 `-d 2 has no effect` | — |
 
 debug 版處理一次 `SYSINFO` 時，server log 的行數：
 
 | 等級 | 總行數 | INFO/WARN | DEBUG | hex dump |
 |---|---|---|---|---|
-| `-d 0` | 6 | 6 | 0 | 0 |
-| `-d 1` | 11 | 6 | 5（附 `file:line`） | 0 |
-| `-d 2` | 21 | 6 | 15 | 10（請求開頭為 `53 59 53 49 4e 46 4f`，即 `SYSINFO`） |
+| `-d 0` | 7 | 7 | 0 | 0 |
+| `-d 1` | 12 | 7 | 5（附 `file:line`） | 0 |
+| `-d 2` | 22 | 7 | 15 | 10（請求開頭為 `53 59 53 49 4e 46 4f`，即 `SYSINFO`） |
 
 ### 6.4 test_capture：tcpdump 抓包與標頭分析
 
@@ -496,6 +525,8 @@ request: WATCH 3 500
 
 - **只支援 Linux：** 用到 `prctl(PR_SET_PDEATHSIG)`、`sysinfo(2)` 和 `/proc/meminfo`。
 - **只支援 IPv4：** server 監聽 `0.0.0.0`，client 用 `AF_INET` 連線。
-- **沒有逾時：** server 和 client 都沒有逾時。連上後不送資料的 client 會一直佔著一個子進程，直到它斷線，機制 [4] 限制這種 client 最多佔用的數量；server 不回應時，client 會一直等到使用者按 `Ctrl+C`。
+- **client 沒有逾時：** server 不回應時，client 會一直等到使用者按 `Ctrl+C`。server 這邊有請求期限（[4]）和 `TCP_USER_TIMEOUT`（[2b]）。
+- **[2b] 只在送資料時才偵測得到：** `TCP_USER_TIMEOUT` 看的是「送出的資料多久沒有 ACK」。client 的網路如果在 `WATCH` 兩次送出之間消失，要等下一次送出後約 3 秒才會發現；server 沒有開 TCP keepalive。
+- **合法的請求仍可能很久：** 請求期限只管請求那一行。`WATCH 100 10000` 是合法的請求，會佔用一個子進程約 16.5 分鐘。
 - **沒有加密與身分驗證：** 連得上 server 的人都能讀到系統資訊。
 - **`make test-capture` 需要 root 權限。**

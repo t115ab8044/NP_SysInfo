@@ -2,7 +2,7 @@
 ==============================================================================
  Two-level debug control: compile time + run time
 ==============================================================================
-date     : 2026-11-12 16:03:55
+date     : 2026-11-14 00:37:29
 compiler : gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
 
 ==============================================================================
@@ -33,37 +33,38 @@ debug build  : 4
 
 --- call instructions inside write_all() (objdump -d libutils.so) ---
 release build:
-    call   1200 <write@plt>
-    call   11d0 <__errno_location@plt>
+    call   1240 <write@plt>
+    call   1200 <__errno_location@plt>
 debug build:
-    call   1200 <write@plt>
-    call   11d0 <__errno_location@plt>
-    call   1300 <log_write@plt>
-    call   1320 <strerror@plt>
-    call   1300 <log_write@plt>
+    call   1240 <write@plt>
+    call   1200 <__errno_location@plt>
+    call   1360 <log_write@plt>
+    call   1380 <strerror@plt>
+    call   1360 <log_write@plt>
 
 --- Code size (size, bytes) ---
    text	   data	    bss	    dec	    hex	filename
-   8333	    728	      8	   9069	   236d	release/libutils.so
-   8741	    736	      8	   9485	   250d	debug/libutils.so
-  11665	   1288	   2176	  15129	   3b19	release/server
-  12249	   1296	   2176	  15721	   3d69	debug/server
+   9015	    752	      8	   9775	   262f	release/libutils.so
+   9423	    760	      8	  10191	   27cf	debug/libutils.so
+  14726	   1468	   2176	  18370	   47c2	release/server
+  15360	   1476	   2176	  19012	   4a44	debug/server
 
 --- Release build run with -d 2 (server and client) ---
 $ ./server -p 9090 -d 2      (release build)
 server log:
-    16:03:57.873 [server:2100] WARN  built without -DENABLE_DEBUG: -d 2 has no effect
-    16:03:57.874 [server:2100] INFO  listening on port 9090 (pid 2100)
-    16:03:57.874 [server:2100] INFO  robustness: [1] reap ON | [2] ignore SIGPIPE ON | [3] length limit ON | [4] max clients 32 | [5] pdeathsig ON
-    16:03:57.875 [server:2100] INFO  debug logs: compile-time compiled out, runtime level 2
-    16:03:57.925 [server:2100] INFO  accepted 127.0.0.1:55584 -> child pid 2102 (connection #1) | active=1
-    16:03:57.925 [server:2102] INFO  127.0.0.1:55584: SYSINFO -> 1 snapshot(s)
-    16:03:57.926 [server:2100] INFO  reaped child 2102: exit 0 (request served) | active=0
+    00:37:32.260 [server:18247] WARN  built without -DENABLE_DEBUG: -d 2 has no effect
+    00:37:32.261 [server:18247] INFO  listening on port 9090 (pid 18247), max clients 32
+    00:37:32.262 [server:18247] INFO  robustness: [1] waitpid loop ON | [2a] ignore SIGPIPE ON | [2b] TCP_USER_TIMEOUT ON | [3] validation ON
+    00:37:32.262 [server:18247] INFO  robustness: [4] request deadline ON | [5a] pdeathsig ON | [5b] graceful Ctrl+C ON
+    00:37:32.262 [server:18247] INFO  debug logs: compile-time compiled out, runtime level 2
+    00:37:32.311 [server:18247] INFO  accepted 127.0.0.1:60226 -> child pid 18249 (connection #1) | active=1
+    00:37:32.311 [server:18249] INFO  127.0.0.1:60226: SYSINFO -> 1 snapshot(s)
+    00:37:32.314 [server:18247] INFO  reaped child 18249: exit 0 (request served) | active=0
 client output:
-    16:03:57.924 [client:2101] WARN  built without -DENABLE_DEBUG: -d 2 has no effect
-    16:03:57.924 [client:2101] INFO  connected to 127.0.0.1:9090
-    16:03:57.924 [client:2101] INFO  request: SYSINFO
-    OK seq=1 pid=2102 host=LAPTOP-0F0NVT4H up=0d 00:37:05 load=0.01/0.02/0.00 mem_avail=6.99/7.61 GiB procs=228
+    00:37:32.311 [client:18248] WARN  built without -DENABLE_DEBUG: -d 2 has no effect
+    00:37:32.311 [client:18248] INFO  connected to 127.0.0.1:9090
+    00:37:32.311 [client:18248] INFO  request: SYSINFO
+    OK seq=1 pid=18249 host=LAPTOP-0F0NVT4H up=0d 21:58:14 load=0.23/0.09/0.02 mem_avail=7.06/7.61 GiB procs=220
 
 ==============================================================================
  Part 2 - run time: debug build with -d 0 / -d 1 / -d 2
@@ -71,73 +72,76 @@ client output:
 
 --- ./server -d 0, one client request ---
 $ ./server -p 9090 -d 0      (debug build)
-16:03:58.240 [server:2103] INFO  listening on port 9090 (pid 2103)
-16:03:58.240 [server:2103] INFO  robustness: [1] reap ON | [2] ignore SIGPIPE ON | [3] length limit ON | [4] max clients 32 | [5] pdeathsig ON
-16:03:58.241 [server:2103] INFO  debug logs: compile-time ENABLED, runtime level 0
-16:03:58.290 [server:2103] INFO  accepted 127.0.0.1:55588 -> child pid 2105 (connection #1) | active=1
-16:03:58.291 [server:2105] INFO  127.0.0.1:55588: SYSINFO -> 1 snapshot(s)
-16:03:58.292 [server:2103] INFO  reaped child 2105: exit 0 (request served) | active=0
+00:37:32.626 [server:18250] INFO  listening on port 9090 (pid 18250), max clients 32
+00:37:32.627 [server:18250] INFO  robustness: [1] waitpid loop ON | [2a] ignore SIGPIPE ON | [2b] TCP_USER_TIMEOUT ON | [3] validation ON
+00:37:32.627 [server:18250] INFO  robustness: [4] request deadline ON | [5a] pdeathsig ON | [5b] graceful Ctrl+C ON
+00:37:32.628 [server:18250] INFO  debug logs: compile-time ENABLED, runtime level 0
+00:37:32.677 [server:18250] INFO  accepted 127.0.0.1:60242 -> child pid 18252 (connection #1) | active=1
+00:37:32.677 [server:18252] INFO  127.0.0.1:60242: SYSINFO -> 1 snapshot(s)
+00:37:32.679 [server:18250] INFO  reaped child 18252: exit 0 (request served) | active=0
 
 --- ./server -d 1, one client request ---
 $ ./server -p 9090 -d 1      (debug build)
-16:03:58.610 [server:2106] INFO  listening on port 9090 (pid 2106)
-16:03:58.610 [server:2106] INFO  robustness: [1] reap ON | [2] ignore SIGPIPE ON | [3] length limit ON | [4] max clients 32 | [5] pdeathsig ON
-16:03:58.611 [server:2106] INFO  debug logs: compile-time ENABLED, runtime level 1
-16:03:58.661 [server:2106] INFO  accepted 127.0.0.1:55594 -> child pid 2108 (connection #1) | active=1
-16:03:58.661 [server:2108] DEBUG server.c:259: 127.0.0.1:55594: child started, waiting for a request
-16:03:58.662 [server:2108] DEBUG server.c:264: 127.0.0.1:55594: request "SYSINFO"
-16:03:58.663 [server:2108] INFO  127.0.0.1:55594: SYSINFO -> 1 snapshot(s)
-16:03:58.663 [server:2108] DEBUG utils.c:228: sysinfo: host=LAPTOP-0F0NVT4H uptime=2226s load1=0.01 mem_avail=7332136/7976576 kB
-16:03:58.664 [server:2108] DEBUG server.c:246: 127.0.0.1:55594: sent snapshot 1/1 (108 bytes)
-16:03:58.664 [server:2108] DEBUG server.c:302: 127.0.0.1:55594: child exiting with code 0 (request served)
-16:03:58.666 [server:2106] INFO  reaped child 2108: exit 0 (request served) | active=0
+00:37:32.994 [server:18253] INFO  listening on port 9090 (pid 18253), max clients 32
+00:37:32.994 [server:18253] INFO  robustness: [1] waitpid loop ON | [2a] ignore SIGPIPE ON | [2b] TCP_USER_TIMEOUT ON | [3] validation ON
+00:37:32.995 [server:18253] INFO  robustness: [4] request deadline ON | [5a] pdeathsig ON | [5b] graceful Ctrl+C ON
+00:37:32.996 [server:18253] INFO  debug logs: compile-time ENABLED, runtime level 1
+00:37:33.045 [server:18253] INFO  accepted 127.0.0.1:60256 -> child pid 18255 (connection #1) | active=1
+00:37:33.045 [server:18255] DEBUG server.c:342: 127.0.0.1:60256: child started, waiting for a request
+00:37:33.046 [server:18255] DEBUG server.c:347: 127.0.0.1:60256: request "SYSINFO"
+00:37:33.046 [server:18255] INFO  127.0.0.1:60256: SYSINFO -> 1 snapshot(s)
+00:37:33.047 [server:18255] DEBUG utils.c:262: sysinfo: host=LAPTOP-0F0NVT4H uptime=79095s load1=0.23 mem_avail=7402608/7976576 kB
+00:37:33.048 [server:18255] DEBUG server.c:322: 127.0.0.1:60256: sent snapshot 1/1 (109 bytes)
+00:37:33.048 [server:18255] DEBUG server.c:408: 127.0.0.1:60256: child exiting with code 0 (request served)
+00:37:33.049 [server:18253] INFO  reaped child 18255: exit 0 (request served) | active=0
 
 --- ./server -d 2, one client request ---
 $ ./server -p 9090 -d 2      (debug build)
-16:03:58.985 [server:2109] INFO  listening on port 9090 (pid 2109)
-16:03:58.986 [server:2109] INFO  robustness: [1] reap ON | [2] ignore SIGPIPE ON | [3] length limit ON | [4] max clients 32 | [5] pdeathsig ON
-16:03:58.986 [server:2109] INFO  debug logs: compile-time ENABLED, runtime level 2
-16:03:59.038 [server:2109] INFO  accepted 127.0.0.1:55600 -> child pid 2111 (connection #1) | active=1
-16:03:59.038 [server:2111] DEBUG server.c:259: 127.0.0.1:55600: child started, waiting for a request
-16:03:59.040 [server:2111] DEBUG request: 7 byte(s)
-16:03:59.041 [server:2111] DEBUG     0000  53 59 53 49 4e 46 4f                              |SYSINFO|
-16:03:59.042 [server:2111] DEBUG server.c:264: 127.0.0.1:55600: request "SYSINFO"
-16:03:59.042 [server:2111] INFO  127.0.0.1:55600: SYSINFO -> 1 snapshot(s)
-16:03:59.043 [server:2111] DEBUG utils.c:228: sysinfo: host=LAPTOP-0F0NVT4H uptime=2226s load1=0.01 mem_avail=7331744/7976576 kB
-16:03:59.043 [server:2111] DEBUG reply: 108 byte(s)
-16:03:59.044 [server:2111] DEBUG     0000  4f 4b 20 73 65 71 3d 31  20 70 69 64 3d 32 31 31  |OK seq=1 pid=211|
-16:03:59.045 [server:2111] DEBUG     0010  31 20 68 6f 73 74 3d 4c  41 50 54 4f 50 2d 30 46  |1 host=LAPTOP-0F|
-16:03:59.045 [server:2111] DEBUG     0020  30 4e 56 54 34 48 20 75  70 3d 30 64 20 30 30 3a  |0NVT4H up=0d 00:|
-16:03:59.046 [server:2111] DEBUG     0030  33 37 3a 30 36 20 6c 6f  61 64 3d 30 2e 30 31 2f  |37:06 load=0.01/|
-16:03:59.046 [server:2111] DEBUG     0040  30 2e 30 32 2f 30 2e 30  30 20 6d 65 6d 5f 61 76  |0.02/0.00 mem_av|
-16:03:59.046 [server:2111] DEBUG     0050  61 69 6c 3d 36 2e 39 39  2f 37 2e 36 31 20 47 69  |ail=6.99/7.61 Gi|
-16:03:59.047 [server:2111] DEBUG     0060  42 20 70 72 6f 63 73 3d  32 32 38 0a              |B procs=228.|
-16:03:59.047 [server:2111] DEBUG server.c:246: 127.0.0.1:55600: sent snapshot 1/1 (108 bytes)
-16:03:59.048 [server:2111] DEBUG server.c:302: 127.0.0.1:55600: child exiting with code 0 (request served)
-16:03:59.049 [server:2109] INFO  reaped child 2111: exit 0 (request served) | active=0
+00:37:33.362 [server:18256] INFO  listening on port 9090 (pid 18256), max clients 32
+00:37:33.363 [server:18256] INFO  robustness: [1] waitpid loop ON | [2a] ignore SIGPIPE ON | [2b] TCP_USER_TIMEOUT ON | [3] validation ON
+00:37:33.364 [server:18256] INFO  robustness: [4] request deadline ON | [5a] pdeathsig ON | [5b] graceful Ctrl+C ON
+00:37:33.364 [server:18256] INFO  debug logs: compile-time ENABLED, runtime level 2
+00:37:33.417 [server:18256] INFO  accepted 127.0.0.1:60270 -> child pid 18258 (connection #1) | active=1
+00:37:33.417 [server:18258] DEBUG server.c:342: 127.0.0.1:60270: child started, waiting for a request
+00:37:33.419 [server:18258] DEBUG request: 7 byte(s)
+00:37:33.420 [server:18258] DEBUG     0000  53 59 53 49 4e 46 4f                              |SYSINFO|
+00:37:33.421 [server:18258] DEBUG server.c:347: 127.0.0.1:60270: request "SYSINFO"
+00:37:33.421 [server:18258] INFO  127.0.0.1:60270: SYSINFO -> 1 snapshot(s)
+00:37:33.422 [server:18258] DEBUG utils.c:262: sysinfo: host=LAPTOP-0F0NVT4H uptime=79095s load1=0.23 mem_avail=7405552/7976576 kB
+00:37:33.422 [server:18258] DEBUG reply: 109 byte(s)
+00:37:33.423 [server:18258] DEBUG     0000  4f 4b 20 73 65 71 3d 31  20 70 69 64 3d 31 38 32  |OK seq=1 pid=182|
+00:37:33.423 [server:18258] DEBUG     0010  35 38 20 68 6f 73 74 3d  4c 41 50 54 4f 50 2d 30  |58 host=LAPTOP-0|
+00:37:33.424 [server:18258] DEBUG     0020  46 30 4e 56 54 34 48 20  75 70 3d 30 64 20 32 31  |F0NVT4H up=0d 21|
+00:37:33.424 [server:18258] DEBUG     0030  3a 35 38 3a 31 35 20 6c  6f 61 64 3d 30 2e 32 33  |:58:15 load=0.23|
+00:37:33.425 [server:18258] DEBUG     0040  2f 30 2e 30 39 2f 30 2e  30 32 20 6d 65 6d 5f 61  |/0.09/0.02 mem_a|
+00:37:33.425 [server:18258] DEBUG     0050  76 61 69 6c 3d 37 2e 30  36 2f 37 2e 36 31 20 47  |vail=7.06/7.61 G|
+00:37:33.425 [server:18258] DEBUG     0060  69 42 20 70 72 6f 63 73  3d 32 32 30 0a           |iB procs=220.|
+00:37:33.426 [server:18258] DEBUG server.c:322: 127.0.0.1:60270: sent snapshot 1/1 (109 bytes)
+00:37:33.426 [server:18258] DEBUG server.c:408: 127.0.0.1:60270: child exiting with code 0 (request served)
+00:37:33.427 [server:18256] INFO  reaped child 18258: exit 0 (request served) | active=0
 
 --- Client side with -d 2 (logs/debug_client_d2.log) ---
-16:03:59.037 [client:2110] INFO  connected to 127.0.0.1:9090
-16:03:59.039 [client:2110] INFO  request: SYSINFO
-16:03:59.039 [client:2110] DEBUG request: 8 byte(s)
-16:03:59.040 [client:2110] DEBUG     0000  53 59 53 49 4e 46 4f 0a                           |SYSINFO.|
-16:03:59.040 [client:2110] DEBUG client.c:102: request sent (8 bytes)
-16:03:59.047 [client:2110] DEBUG reply: 107 byte(s)
-16:03:59.048 [client:2110] DEBUG     0000  4f 4b 20 73 65 71 3d 31  20 70 69 64 3d 32 31 31  |OK seq=1 pid=211|
-16:03:59.049 [client:2110] DEBUG     0010  31 20 68 6f 73 74 3d 4c  41 50 54 4f 50 2d 30 46  |1 host=LAPTOP-0F|
-16:03:59.049 [client:2110] DEBUG     0020  30 4e 56 54 34 48 20 75  70 3d 30 64 20 30 30 3a  |0NVT4H up=0d 00:|
-16:03:59.050 [client:2110] DEBUG     0030  33 37 3a 30 36 20 6c 6f  61 64 3d 30 2e 30 31 2f  |37:06 load=0.01/|
-16:03:59.050 [client:2110] DEBUG     0040  30 2e 30 32 2f 30 2e 30  30 20 6d 65 6d 5f 61 76  |0.02/0.00 mem_av|
-16:03:59.051 [client:2110] DEBUG     0050  61 69 6c 3d 36 2e 39 39  2f 37 2e 36 31 20 47 69  |ail=6.99/7.61 Gi|
-16:03:59.051 [client:2110] DEBUG     0060  42 20 70 72 6f 63 73 3d  32 32 38                 |B procs=228|
-OK seq=1 pid=2111 host=LAPTOP-0F0NVT4H up=0d 00:37:06 load=0.01/0.02/0.00 mem_avail=6.99/7.61 GiB procs=228
-16:03:59.052 [client:2110] DEBUG client.c:348: connection closed, exit status 0
+00:37:33.417 [client:18257] INFO  connected to 127.0.0.1:9090
+00:37:33.418 [client:18257] INFO  request: SYSINFO
+00:37:33.418 [client:18257] DEBUG request: 8 byte(s)
+00:37:33.419 [client:18257] DEBUG     0000  53 59 53 49 4e 46 4f 0a                           |SYSINFO.|
+00:37:33.419 [client:18257] DEBUG client.c:109: request sent (8 bytes)
+00:37:33.426 [client:18257] DEBUG reply: 108 byte(s)
+00:37:33.426 [client:18257] DEBUG     0000  4f 4b 20 73 65 71 3d 31  20 70 69 64 3d 31 38 32  |OK seq=1 pid=182|
+00:37:33.427 [client:18257] DEBUG     0010  35 38 20 68 6f 73 74 3d  4c 41 50 54 4f 50 2d 30  |58 host=LAPTOP-0|
+00:37:33.427 [client:18257] DEBUG     0020  46 30 4e 56 54 34 48 20  75 70 3d 30 64 20 32 31  |F0NVT4H up=0d 21|
+00:37:33.428 [client:18257] DEBUG     0030  3a 35 38 3a 31 35 20 6c  6f 61 64 3d 30 2e 32 33  |:58:15 load=0.23|
+00:37:33.429 [client:18257] DEBUG     0040  2f 30 2e 30 39 2f 30 2e  30 32 20 6d 65 6d 5f 61  |/0.09/0.02 mem_a|
+00:37:33.429 [client:18257] DEBUG     0050  76 61 69 6c 3d 37 2e 30  36 2f 37 2e 36 31 20 47  |vail=7.06/7.61 G|
+00:37:33.430 [client:18257] DEBUG     0060  69 42 20 70 72 6f 63 73  3d 32 32 30              |iB procs=220|
+OK seq=1 pid=18258 host=LAPTOP-0F0NVT4H up=0d 21:58:15 load=0.23/0.09/0.02 mem_avail=7.06/7.61 GiB procs=220
+00:37:33.431 [client:18257] DEBUG client.c:410: connection closed, exit status 0
 
 --- Server log lines per runtime level ---
   level    total   INFO/WARN   DEBUG   hex dump
-  -d 0         6           6       0          0
-  -d 1        11           6       5          0
-  -d 2        21           6      15         10
+  -d 0         7           7       0          0
+  -d 1        12           7       5          0
+  -d 2        22           7      15         10
 
 ==============================================================================
  Checks
@@ -156,7 +160,7 @@ OK seq=1 pid=2111 host=LAPTOP-0F0NVT4H up=0d 00:37:06 load=0.01/0.02/0.00 mem_av
   [PASS] -d 1: DEBUG lines carry file:line
   [PASS] -d 2: hex dumps present (10 lines)
   [PASS] -d 2: the request dump reads "SYSINFO" (53 59 53 49 4e 46 4f)
-  [PASS] output grows with the level (6 < 11 < 21 lines)
+  [PASS] output grows with the level (7 < 12 < 22 lines)
 
 ==============================================================================
  Result
