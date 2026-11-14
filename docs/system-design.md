@@ -6,25 +6,27 @@
 
 管理多台 Linux 主機時，常需要快速知道每台主機的負載和記憶體狀況。主機上跑 **server**，其他人不用登入主機，用 **client** 就能查詢一次，或連續觀察幾秒鐘的變化。
 
-| 目標 | 設計上的對應 |
-|---|---|
-| 多個 client 同時查詢，彼此不影響 | 每條連線 `fork()` 一個 child，一個 child 出錯不影響 parent 和其他連線 |
-| 遇到異常不當掉、不留垃圾 | 7 個穩健機制，處理 child 回收、連線中斷、惡意請求、慢速連線、server 結束五類異常 |
-| 每個保護機制都看得到效果 | 每個機制都能用參數關閉，實際比較有無機制的差異 |
-| 出問題時能追查 | 兩層 Debug：編譯期決定有沒有 debug 程式碼，執行期決定印多少 |
+| 目標 | 設計上的對應 | 怎麼驗證 |
+|---|---|---|
+| 多個 client 同時查詢，彼此不影響（至少 10 個） | 每條連線 `fork()` 一個 child（預設最多 32 個），一個 child 出錯不影響 parent 和其他連線 | `test_concurrent`：12 個 client 同時送出不同的 `WATCH`，`ps` 看到 12 個 child，12 個 client 收到的 `pid=` 都不同（[README 6.1](../README.md#61-test_concurrent12-個-client-併發)） |
+| 遇到異常不當掉，不留殭屍和孤兒程序 | 7 個穩健機制，處理 child 回收、連線中斷、惡意請求、慢速連線、server 結束五類異常 | `test_robustness`：每個機制關閉、開啟各跑一次，比較兩次的結果（[README 6.2](../README.md#62-test_robustness七組-withwithout-對照)） |
+| 每個保護機制都看得到效果 | 每個機制都能用參數關閉，實際比較有無機制的差異 | 同上：7 組對照由同一支測試自動跑出，每組的 log 存在 `logs/robust_*.log` |
+| 出問題時能追查 | 兩層 Debug：編譯期決定有沒有 debug 程式碼，執行期決定印多少 | `test_debug`：release 版的執行檔裡找不到 debug 字串；debug 版用 `-d 0/1/2` 處理一次 `SYSINFO`，log 依序是 7、12、22 行（[README 6.3](../README.md#63-test_debug雙層-debug)） |
+
+期中規定與本專案做法的逐條對照見 [README 需求對照](../README.md#需求對照)。
 
 
 ## 2. 系統架構
 
 ```mermaid
 flowchart TD
-    C["client"]
+    C["client 1 … N"]
     subgraph SRV["server"]
         subgraph P["Server parent（一個程序）"]
             A["主迴圈<br/>accept → 檢查上限<br/>→ fork"]
-            H["Signal handlers<br/>[1] SIGCHLD：waitpid 迴圈回收<br/>[5b] SIGINT：停止 accept"]
+            H["Signal handlers<br/>[1] SIGCHLD：迴圈回收<br/>[5b] SIGINT：停止 accept"]
         end
-        K["Child 1 … N（預設最多 32 個）<br/>[2a] 處理 EPIPE<br/>[2b] TCP_USER_TIMEOUT 3 秒<br/>[3] 驗證請求<br/>[4] 請求 3 秒內送完<br/>[5a] PDEATHSIG<br/>[5b] 忽略 SIGINT"]
+        K["Child 1 … N<br/>（預設最多 32 個）<br/>[2a] 處理 EPIPE<br/>[2b] TCP_USER_TIMEOUT<br/>[3] 驗證請求<br/>[4] 請求 3 秒內送完<br/>[5a] PDEATHSIG<br/>[5b] 忽略 SIGINT"]
     end
     OS{{"Linux kernel"}}
     SO[("libutils.so")]
@@ -33,13 +35,13 @@ flowchart TD
     A ==>|"滿了：ERROR server busy"| C
     A -->|"② fork，連線交給 child"| K
     C <==>|"③ 請求與回覆"| K
-    K <-.->|"④ _exit(0–4)<br/>[5a] parent 死掉時收到 SIGTERM"| OS
-    H <-.->|"⑤ SIGCHLD → waitpid()"| OS
+    K <-.->|"④ 讀取 /proc、sysinfo(2)<br/>⑤ _exit(0–4)<br/>[5a] parent 死掉時<br/>收到 SIGTERM"| OS
+    H <-.->|"⑥ SIGCHLD → waitpid()"| OS
     C --- SO
     SRV --- SO
 ```
 
-**圖例：** 粗線是 TCP 上的資料，細實線是 `fork()`，虛線是和 kernel 之間的互動（程序結束、訊號、回收），沒有箭頭的線是動態連結。①～⑤ 是一條連線的先後順序；[1]～[5b] 是[第 5 節](#5-穩健性設計)的穩健機制，標在負責它的程序上。
+**圖例：** 粗線是 TCP 上的資料，細實線是 `fork()`，虛線是和 kernel 之間的互動（讀取系統資訊、程序結束、訊號、回收），沒有箭頭的線是動態連結。①～⑥ 是一條連線的先後順序；[1]～[5b] 是[第 5 節](#5-穩健性設計)的穩健機制，標在負責它的程序上。
 
 ### 程序模型（Process Model）
 
@@ -52,7 +54,7 @@ flowchart TD
 
 ### 資料流（Data Flow）
 
-連線建立後，請求與回應只在 **client 和 child 之間**傳送。child 結束時 kernel 送出 **SIGCHLD**，parent 用 **`waitpid()`** 回收並記錄 exit code，不留下殭屍程序。
+連線交給 child 後，請求與回應只在 **client 和 child 之間**傳送。child 結束時 kernel 送出 **SIGCHLD**，parent 用 **`waitpid()`** 回收並記錄 exit code，不留下殭屍程序。
 
 ### 共用函式庫（Shared Library）
 
@@ -82,17 +84,31 @@ sequenceDiagram
     P->>P: 回到主迴圈，寫 log「reaped child ... exit 0」
 ```
 
-兩個 `close()` 讓每條連線只有一個程序持有：parent 只留 listening socket，child 只留自己的連線。實測服務 50 個 client 前後，parent 的 fd 都是 5 個，child 也只持有自己那條連線。
+兩個 `close()` 讓每條連線只有一個程序持有：parent 只留 listening socket，child 只留自己的連線，所以 parent 的 fd 數量不會隨著服務過的 client 增加。用 `ls -l /proc/<pid>/fd` 就能檢查 parent 和 child 各自持有哪些 socket。
 
 ### 請求與回應
 
 | Client 送出 | Server 回覆 |
 |---|---|
 | `SYSINFO` | 一行 `OK seq=1 pid=... host=... up=... load=... mem_avail=... procs=...` |
-| `WATCH <count> <ms>` | 每隔 `<ms>` 毫秒一行，共 `<count>` 行 |
+| `WATCH <count> <ms>` | 每隔 `<ms>` 毫秒一行，共 `<count>` 行（count 1–100，ms 100–10000） |
 | 錯誤的請求 | 一行 `ERROR <原因>`，然後關閉 |
 
 一條連線只處理一個請求。回覆裡的 `pid=` 是處理這條連線的 child，抓包或 client 輸出都能直接看出是哪個程序服務的。
+
+`OK` 那一行的欄位如下；`WATCH` 的每一行都會重新讀取一次：
+
+| 欄位 | 意義 | 格式 | 來源 |
+|---|---|---|---|
+| `seq` | 這條連線的第幾行回覆：`SYSINFO` 固定是 1，`WATCH` 從 1 數到 count | 整數 | child 的迴圈計數 |
+| `pid` | 處理這條連線的 child | 整數 | `getpid()` |
+| `host` | 主機名稱 | 字串，讀不到時是 `unknown` | `gethostname()` |
+| `up` | 開機多久 | 天、時:分:秒，例如 `0d 00:00:30` | `sysinfo(2)` 的 `uptime` |
+| `load` | 1、5、15 分鐘的平均負載 | 三個小數，以 `/` 分開 | `getloadavg()` |
+| `mem_avail` | 可用記憶體／總記憶體 | GiB，小數兩位 | `/proc/meminfo` 的 `MemAvailable`、`MemTotal`；讀不到時改用 `sysinfo(2)` 估算 |
+| `procs` | 整台主機的 task 總數 | 整數 | `sysinfo(2)` 的 `procs` |
+
+`procs` 不是程序數：kernel 把每個 thread（包含 kernel thread）都算成一個 task，所以會比 `ps` 列出的程序多，數字和 `/proc/loadavg` 第 4 欄 `/` 後面的總數相同。
 
 ### Parent 主迴圈
 

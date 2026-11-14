@@ -4,7 +4,7 @@ C 語言網路與系統程式設計期中專案。
 
 **學號：** 115ab8044 ・ **姓名：** 顏祺宸
 
-Client 連到 server，用一行文字請求查詢主機的即時系統資訊：hostname、uptime、CPU load average、可用記憶體與進程數。可以查一次，也可以要求 server 每隔一段時間連續回報。Server 為每個連線 `fork()` 一個子進程處理，雙方共用的工具函式封裝在動態函式庫 `libutils.so`。
+Client 連到 server，用一行文字請求查詢主機的即時系統資訊：hostname、uptime、CPU load average、可用記憶體，以及 task 總數（每個 thread 都算一個）。可以查一次，也可以要求 server 每隔一段時間連續回報。Server 為每個連線 `fork()` 一個子進程處理，雙方共用的工具函式封裝在動態函式庫 `libutils.so`。
 
 **應用情境：** 管理多台 Linux 主機時，常需要快速知道每台主機的負載和記憶體狀況。主機上跑 `server`，其他人不用登入主機，就能用 `client` 查詢一次，或連續觀察幾秒鐘的變化。
 
