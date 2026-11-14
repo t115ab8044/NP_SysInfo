@@ -1,6 +1,6 @@
 # 系統設計說明（System Design Explanation）
 
-[← 回到 README](../README.md) ・ [關鍵原始碼說明](key-source.md) ・ [執行截圖](screenshots.md) ・ [稽核討論](audit.md)
+[← 回到 README](../README.md) ・ [關鍵原始碼說明](key-source.md) ・ [執行截圖](screenshots.md)
 
 ## 1. 應用情境與目標
 
@@ -82,7 +82,7 @@ sequenceDiagram
     P->>P: 回到主迴圈，寫 log「reaped child ... exit 0」
 ```
 
-兩個 `close()` 讓每條連線只有一個程序持有：parent 只留 listening socket，child 只留自己的連線。[稽核討論](audit.md)實測服務 50 個 client 前後，parent 的 fd 都是 5 個，child 也只持有自己那條連線。
+兩個 `close()` 讓每條連線只有一個程序持有：parent 只留 listening socket，child 只留自己的連線。實測服務 50 個 client 前後，parent 的 fd 都是 5 個，child 也只持有自己那條連線。
 
 ### 請求與回應
 

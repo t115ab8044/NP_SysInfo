@@ -1,7 +1,6 @@
 # Build outputs (recreate with `make`)
 /server
 /client
-/win_client.exe
 *.so
 *.o
 .build_flags

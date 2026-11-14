@@ -1,6 +1,6 @@
 # 關鍵原始碼說明（Description of Key Source Code）
 
-[← 回到 README](../README.md) ・ [系統設計說明](system-design.md) ・ [執行截圖](screenshots.md) ・ [稽核討論](audit.md)
+[← 回到 README](../README.md) ・ [系統設計說明](system-design.md) ・ [執行截圖](screenshots.md)
 
 以下片段都來自本 repo 的原始碼，`/* ... */` 表示省略與重點無關的部分。點擊「位置」的連結可以看到完整程式。
 
@@ -232,7 +232,7 @@ if (strcmp(line, "SYSINFO") == 0) {
 ```
 
 - `%15s` 限制指令長度，避免寫出 `cmd` 的範圍。
-- `%3d`、`%5d` 限制數字最多讀 3 位和 5 位，剛好容納上限 100 和 10000。沒有寬度時，`WATCH 4294967297 100` 會讓 `int` 溢位，glibc 只留下低 32 位元，變成 `WATCH 1 100` 被接受（稽核時發現，見 [稽核討論](audit.md)）。
+- `%3d`、`%5d` 限制數字最多讀 3 位和 5 位，剛好容納上限 100 和 10000。沒有寬度時，`WATCH 4294967297 100` 會讓 `int` 溢位，glibc 只留下低 32 位元，變成 `WATCH 1 100` 被接受（測試時發現的問題）。
 - 多讀一個 `%1s`：如果後面還有多餘的字，`fields` 會是 4，請求就被拒絕。數字超過寬度時，剩下的位數也會被 `%1s` 讀到，一樣被拒絕。
 - `count` 和 `interval_ms` 都有上下限：`WATCH 100 0`（100 行一次湧出）和 `WATCH 100000 1000`（佔住 child 27.8 小時）都被拒絕。
 - `--no-validate` 保留了沒有寬度、沒有範圍檢查的寫法，作為 Without 的對照組。

@@ -16,8 +16,6 @@ Client 連到 server，用一行文字請求查詢主機的即時系統資訊：
 | Description of key source code（關鍵原始碼說明） | [docs/key-source.md](docs/key-source.md) |
 | Execution screenshots（執行截圖） | [docs/screenshots.md](docs/screenshots.md) |
 | Complete source code（完整原始碼） | 本 repo，檔案清單見[第 1 節](#1-專案架構) |
-| Real Test（真實測試） | [第 7 節](#7-real-testwindows--wsl2)：Windows client 連到 WSL2 上的 server |
-| Auditing discussion（稽核討論） | [docs/audit.md](docs/audit.md) |
 
 ## 需求對照
 
@@ -50,9 +48,8 @@ Client 連到 server，用一行文字請求查詢主機的即時系統資訊：
 │   ├── test_concurrent.c       12 個 client 併發證明
 │   ├── test_robustness.c       7 組穩健機制的 With/Without 對照
 │   ├── test_debug.c            雙層 Debug 證明（編譯期與執行期）
-│   ├── test_capture.c          tcpdump 抓包與標頭分析
-│   └── win_client.c            Real Test 用的 Windows client（Winsock）
-├── docs/                系統設計、關鍵原始碼說明、執行截圖與稽核討論
+│   └── test_capture.c          tcpdump 抓包與標頭分析
+├── docs/                系統設計、關鍵原始碼說明與執行截圖
 └── logs/                測試結果與抓包檔（重跑測試會產生細項 log）
 ```
 
@@ -111,7 +108,6 @@ gcc -Wall -Wextra -pedantic -std=gnu11 -O2 -g -DENABLE_DEBUG -o client client.c 
 | `make test-capture` | tcpdump 抓包測試，需要 root 或 sudo |
 | `make inspect` | 列出 `libutils.so` 匯出的符號，以及 `ldd` 連結結果 |
 | `make capture` | 用 `sudo tcpdump -i lo -l -vn -e -x 'tcp port 9090'` 即時顯示 port 9090 的流量：`-l` 逐行輸出、`-v` 顯示 IP 標頭的 tos／ttl／id／checksum、`-n` 不反查名稱、`-e` 顯示 MAC 和 EtherType、`-x` 顯示 hex |
-| `make win-client` | 用 mingw-w64 編出 Real Test 用的 `win_client.exe`（[第 7 節](#7-real-testwindows--wsl2)） |
 | `make clean` | 刪除 `.so`、執行檔與測試程式 |
 
 - **切換 DEBUG 會自動全部重編。** Makefile 把 CFLAGS 記錄在 `.build_flags`，`DEBUG=1` 和 `DEBUG=0` 互換時，`.so` 和兩個執行檔會一起重編。
@@ -460,68 +456,17 @@ wsl -d Ubuntu -u root -- make test-capture
 | `test_concurrent.log`、`test_robustness.log`、`test_debug.log`、`test_capture.log` | 四項測試的完整輸出 |
 | `capture.pcap` | tcpdump 抓包檔，可用 Wireshark 開啟 |
 | `capture_decoded.txt` | `tcpdump -r capture.pcap -n -x` 的完整輸出 |
-| `real_test.log`、`real_test.pcapng` | Real Test 的紀錄（兩邊的輸出和連線統計）與 Windows 端的抓包檔 |
 
 每個情境的 server、client 細項紀錄（`robust_*`、`concurrent_*`、`debug_*`、`capture_server.log`）沒有放進 repo，重跑測試後會自動產生在 `logs/`。
 
 ---
 
-## 7. Real Test：Windows ↔ WSL2
-
-前面的測試都在 loopback（`127.0.0.1`）上進行，封包不會離開 kernel。Real Test 改從 **Windows** 連到 **WSL2** 裡的 server：兩邊是不同的作業系統，各有自己的 IP，封包要經過 Hyper-V 的虛擬網卡 `vEthernet (WSL)`，Wireshark 可以在 Windows 端抓到。
-
-`client.c` 要連結 `libutils.so`，只能在 Linux 執行，所以另外寫了一支 Windows 版的 [tests/win_client.c](tests/win_client.c)。它用 Winsock 送出同樣的一行請求，印出每一行回覆，一樣沒有逾時。
-
-**限制：** 兩邊在同一台實體電腦上，網路是虛擬的，延遲和掉包都比真實網路少。
-
-**步驟：**
-
-1. WSL 終端機：建置 Windows client（需要 mingw-w64，Ubuntu 上用 `sudo apt install mingw-w64` 安裝），查 WSL 的 IP，再啟動 server。
-
-   ```bash
-   make win-client && hostname -I
-   ```
-
-   ```bash
-   ./server -d 1
-   ```
-
-2. Wireshark：選 `vEthernet (WSL (Hyper-V firewall))` 介面開始抓包，display filter 輸入 `tcp.port == 9090`。
-3. Windows PowerShell：進到專案資料夾，把下面的 `172.17.107.87` 換成第 1 步查到的 IP。
-
-   ```powershell
-   .\win_client.exe 172.17.107.87
-   .\win_client.exe 172.17.107.87 9090 "WATCH 3 500"
-   .\win_client.exe 172.17.107.87 9090 HELLO
-   ```
-
-**結果**（[logs/real_test.log](logs/real_test.log)）：
-
-```text
-PS> .\win_client.exe 172.17.107.87 9090 "WATCH 3 500"
-connected 172.17.96.1:49376 -> 172.17.107.87:9090 in 1.33 ms
-request: WATCH 3 500
-     6.12 ms  OK seq=1 pid=3334 host=LAPTOP-0F0NVT4H up=0d 00:46:59 load=0.00/0.02/0.00 mem_avail=7.04/7.61 GiB procs=212
-   508.19 ms  OK seq=2 pid=3334 host=LAPTOP-0F0NVT4H up=0d 00:46:59 load=0.00/0.02/0.00 mem_avail=7.04/7.61 GiB procs=206
-  1010.51 ms  OK seq=3 pid=3334 host=LAPTOP-0F0NVT4H up=0d 00:47:00 load=0.00/0.02/0.00 mem_avail=7.04/7.61 GiB procs=206
-  1011.47 ms  server closed the connection: 3 OK line(s), 0 ERROR line(s)
-```
-
-| 項目 | 結果 |
-|---|---|
-| 位址 | client 是 Windows 的 `172.17.96.1`，server 是 WSL2 的 `172.17.107.87`，不是 `127.0.0.1` |
-| 三個請求 | `SYSINFO` 收到 1 行 `OK`；`WATCH 3 500` 每隔約 500 ms 收到 1 行，共 3 行；`HELLO` 收到 `ERROR unknown request` |
-| Server log | 3 條連線各由一個 child 處理（PID 3333、3334、3335），結束後全部回收，exit code 分別是 0、0、2 |
-| 抓包 | `logs/real_test.pcapng` 共 34 個封包、3 條 TCP 連線；Ethernet 位址是 Hyper-V 虛擬網卡（`00:15:5d:...`），每條連線都有三向交握、請求、回應和雙方的 FIN |
-
----
-
-## 8. 測試環境
+## 7. 測試環境
 
 - WSL2 Ubuntu，kernel `6.18.33.2-microsoft-standard-WSL2`
 - gcc 15.2.0、GNU Make 4.4.1、tcpdump 4.99.6
 
-## 9. 限制
+## 8. 限制
 
 - **只支援 Linux：** 用到 `prctl(PR_SET_PDEATHSIG)`、`sysinfo(2)` 和 `/proc/meminfo`。
 - **只支援 IPv4：** server 監聽 `0.0.0.0`，client 用 `AF_INET` 連線。
