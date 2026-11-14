@@ -10,7 +10,7 @@
 |---|---|---|
 | 多個 client 同時查詢，彼此不影響（至少 10 個） | 每條連線 `fork()` 一個 child（預設最多 32 個），一個 child 出錯不影響 parent 和其他連線 | `test_concurrent`：12 個 client 同時送出不同的 `WATCH`，`ps` 看到 12 個 child，12 個 client 收到的 `pid=` 都不同（[README 6.1](../README.md#61-test_concurrent12-個-client-併發)） |
 | 遇到異常不當掉，不留殭屍和孤兒程序 | 7 個穩健機制，處理 child 回收、連線中斷、惡意請求、慢速連線、server 結束五類異常 | `test_robustness`：每個機制關閉、開啟各跑一次，比較兩次的結果（[README 6.2](../README.md#62-test_robustness七組-withwithout-對照)） |
-| 每個保護機制都看得到效果 | 每個機制都能用參數關閉，實際比較有無機制的差異 | 同上：7 組對照由同一支測試自動跑出，每組的 log 存在 `logs/robust_*.log` |
+| 每個保護機制都看得到效果 | 每個機制都能用參數關閉，實際比較有無機制的差異 | 同上：7 組對照由同一支測試自動跑出，結果彙整在 `logs/test_robustness.log` |
 | 出問題時能追查 | 兩層 Debug：編譯期決定有沒有 debug 程式碼，執行期決定印多少 | `test_debug`：release 版的執行檔裡找不到 debug 字串；debug 版用 `-d 0/1/2` 處理一次 `SYSINFO`，log 依序是 7、12、22 行（[README 6.3](../README.md#63-test_debug雙層-debug)） |
 
 期中規定與本專案做法的逐條對照見 [README 需求對照](../README.md#需求對照)。
@@ -153,16 +153,25 @@ child 讀一行請求（最多 127 bytes，3 秒內要送完），判斷是 `SYS
 
 連線上限（`-m`，預設 32）是一般功能，不算在 7 個機制裡：它只能限制 child 的數量，擋不住 Slowloris，所以還需要 [4]。
 
-實測對照見 [README 6.2](../README.md#62-test_robustness七組-withwithout-對照)。
+**[4] 管不到的情況：** [4] 只管請求送完之前。請求本身合法時，例如 `WATCH 100 10000`，child 要送 99 × 10 秒，約 16.5 分鐘；同一台機器送 32 個這種請求，名額一樣會被佔滿，別人只會收到 `ERROR server busy`。目前沒有處理，列在[第 6 節](#6-設計取捨與限制)的限制。
+
+實測對照見 [README 6.2](../README.md#62-test_robustness七組-withwithout-對照)。其中 [2b] 設定 3 秒，實測是斷線後 4.0 秒才停：3 秒從第一筆沒收到 ACK 的資料送出時開始算，而 child 每 0.5 秒才送一次，斷線後要等下一筆送出才開始計時，逾時後也要等下一次 `write()` 才收到 `ETIMEDOUT`。
 
 ## 6. 設計取捨與限制
 
 | 決定 | 好處 | 代價 |
 |---|---|---|
 | 每條連線 fork 一個 child | 隔離性好，一個 child 當掉不影響其他連線；程式簡單 | 每條連線一個程序，比 thread 耗資源，所以用 `-m` 限制數量（預設 32） |
-| 兩個 3 秒的期限（[2b]、[4]） | 斷線和慢速的 client 很快就被放掉，名額回得來 | 網路很差的正常 client（例如斷線超過 3 秒）也會被切斷；實際部署可以把時間調長 |
+| 兩個 3 秒的期限（[2b]、[4]） | 斷線和慢速的 client 很快就被放掉，名額回得來 | 網路很差的正常 client（例如斷線超過 3 秒）也會被切斷；要調長得改 `server.c` 的常數再重新編譯 |
 | 請求和回應用一行純文字 | 抓包時直接讀得懂，用 `telnet` 或 `nc` 也能測 | 傳數字比二進位格式多幾個 bytes |
 | 一條連線只處理一個請求 | child 的流程單純，處理完就結束 | 每次查詢都要重新做三向交握 |
 | signal handler 只記錄，log 由主迴圈印 | 避免在 handler 裡呼叫不安全的 `printf()` | 回收紀錄可能延後到下一次 `accept()` 返回才印出 |
 
-**其他限制：** 只支援 Linux 與 IPv4；沒有加密與身分驗證，連得上 server 的人都能讀到系統資訊。
+**其他限制：**
+
+- 只支援 Linux 與 IPv4。
+- 沒有加密與身分驗證，連得上 server 的人都能讀到系統資訊。
+- 合法的長請求可以佔滿名額：32 個 `WATCH 100 10000` 會讓其他 client 收到 `ERROR server busy` 約 16.5 分鐘。這種請求也比 [5b] 等待的 30 秒長，按 `Ctrl+C` 後會被切斷。可以再加的保護：限制同一個 IP 同時的連線數，或限制每個請求的總時間（(count − 1) × ms）。
+- `fork()` 失敗時，parent 只記錄錯誤並關閉連線，client 收不到任何回覆（client 以 exit 2 結束）。
+- client 沒有逾時：server 不回覆也不關閉連線時，client 會一直等到使用者按 `Ctrl+C`。
+- 3 秒（[2b]、[4]）、30 秒（[5b]）和 `WATCH` 的範圍都是寫在程式裡的常數，沒有命令列參數可以調整。

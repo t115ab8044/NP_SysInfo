@@ -257,7 +257,7 @@ DEBUG     0000  53 59 53 49 4e 46 4f 0a                           |SYSINFO.|
 
 - **問題：** client 正常關閉時，kernel 會送出 FIN，server 很快就知道（[2a]）。但手機進了電梯、Wi-Fi 斷線或網路線被拔掉時，什麼封包都不會送出。這時 `write()` 只是把資料複製到 kernel 的送出緩衝區，照樣成功；子進程以為一切正常，對著已經不在的 client 一直送。
 - **作法：** 子進程在連線上設定 `setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, 3000)`：已送出的資料超過 3 秒沒有收到 ACK，kernel 就放棄這條連線，下一次 `write()` 回傳 `ETIMEDOUT`，子進程記錄 `client unreachable` 後以 exit 3 結束。
-- **關閉後：** 測試在 client 收到 2 筆後，用 `tc qdisc add dev lo root netem loss 100%` 丟掉所有封包。子進程又「送」了 9 秒，把 20 筆全部送完，log 寫著 `exit 0 (request served)`，但 client 只收到 2 筆。開啟時，子進程在斷線 4.0 秒後收到 `ETIMEDOUT` 並停止。
+- **關閉後：** 測試在 client 收到 2 筆後，用 `tc qdisc add dev lo root netem loss 100%` 丟掉所有封包。子進程又「送」了 9 秒，把 20 筆全部送完，log 寫著 `exit 0 (request served)`，但 client 只收到 2 筆。開啟時，子進程在斷線 4.0 秒後收到 `ETIMEDOUT` 並停止。比 3 秒多出來的時間，是因為 3 秒從斷線後第一筆送出的資料開始算，逾時後也要等下一次 `write()` 才會發現，而子進程每 0.5 秒才寫一次。
 - **測試環境：** `tc` 需要 root 權限。測試程式先用 `unshare(CLONE_NEWUSER | CLONE_NEWNET)` 建立自己的 network namespace（和 `unshare -rn` 相同，不需要 root），只在裡面的 loopback 上操作，不會影響系統的網路。
 
 ### [3] 請求驗證：四種惡意請求
@@ -472,6 +472,8 @@ wsl -d Ubuntu -u root -- make test-capture
 - **只支援 IPv4：** server 監聽 `0.0.0.0`，client 用 `AF_INET` 連線。
 - **client 沒有逾時：** server 不回應時，client 會一直等到使用者按 `Ctrl+C`。server 這邊有請求期限（[4]）和 `TCP_USER_TIMEOUT`（[2b]）。
 - **[2b] 只在送資料時才偵測得到：** `TCP_USER_TIMEOUT` 看的是「送出的資料多久沒有 ACK」。client 的網路如果在 `WATCH` 兩次送出之間消失，要等下一次送出後約 3 秒才會發現；server 沒有開 TCP keepalive。
-- **合法的請求仍可能很久：** 請求期限只管請求那一行。`WATCH 100 10000` 是合法的請求，會佔用一個子進程約 16.5 分鐘。
+- **合法的請求仍可能很久：** 請求期限只管請求那一行。`WATCH 100 10000` 是合法的請求，會佔用一個子進程約 16.5 分鐘；同時送 32 個就能佔滿所有名額。可以再加的保護是限制同一個 IP 同時的連線數，或限制每個請求的總時間。
+- **`fork()` 失敗時沒有回覆：** parent 只記錄錯誤並關閉連線，client 以 exit 2 結束。
+- **時間與範圍不能用參數調整：** 3 秒、30 秒和 `WATCH` 的範圍都是寫在 `server.c`、`utils.h` 的常數，要改得重新編譯。
 - **沒有加密與身分驗證：** 連得上 server 的人都能讀到系統資訊。
 - **`make test-capture` 需要 root 權限。**
