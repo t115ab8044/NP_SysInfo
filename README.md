@@ -304,14 +304,14 @@ DEBUG     0000  53 59 53 49 4e 46 4f 0a                           |SYSINFO.|
 
 ### 6.1 test_concurrent：12 個 client 併發
 
-12 個 client 同時連線，每個送出不同的請求，從 `WATCH 2 3000` 到 `WATCH 31 100`，筆數和間隔都不一樣。每個請求的「(筆數 − 1) × 間隔」都是 3000 ms，所以每條連線都維持 3 秒。測試程式在這段時間內拍下 `ps aux` 和進程樹：
+12 個 client 同時連線，每個送出不同的請求，從 `WATCH 2 3000` 到 `WATCH 31 100`，筆數和間隔都不一樣。每個請求的「(筆數 − 1) × 間隔」都是 3000 ms，所以每條連線都維持 3 秒。測試程式在這段時間內拍下 `ps aux` 和進程樹（以下取自 `logs/test_concurrent.log`）：
 
 ```text
     PID    PPID STAT     ELAPSED CMD
-  12061   12041 S+         00:01 ./server -p 9090
-  12074   12061 S+         00:01  \_ ./server -p 9090
-  12075   12061 S+         00:01  \_ ./server -p 9090
-    ...                              (共 12 個 child，PPID 都是 12061)
+  18160   18140 S+         00:01 ./server -p 9090
+  18173   18160 S+         00:01  \_ ./server -p 9090
+  18174   18160 S+         00:01  \_ ./server -p 9090
+    ...                              (共 12 個 child，PPID 都是 18160)
 server children alive           : 12
 established TCP conns on :9090  : 12
 ```
@@ -319,18 +319,18 @@ established TCP conns on :9090  : 12
 client 結束後，列出每個 client 的請求、收到幾筆、由哪個 child 回應：
 
 ```text
-[client 01] WATCH 2 3000  ->  2 snapshot(s), served by pid=12077
-[client 02] WATCH 3 1500  ->  3 snapshot(s), served by pid=12080
-[client 03] WATCH 4 1000  ->  4 snapshot(s), served by pid=12081
-[client 04] WATCH 5 750   ->  5 snapshot(s), served by pid=12082
-[client 05] WATCH 6 600   ->  6 snapshot(s), served by pid=12078
-[client 06] WATCH 7 500   ->  7 snapshot(s), served by pid=12079
-[client 07] WATCH 9 375   ->  9 snapshot(s), served by pid=12076
-[client 08] WATCH 11 300  -> 11 snapshot(s), served by pid=12074
-[client 09] WATCH 13 250  -> 13 snapshot(s), served by pid=12075
-[client 10] WATCH 16 200  -> 16 snapshot(s), served by pid=12083
-[client 11] WATCH 21 150  -> 21 snapshot(s), served by pid=12084
-[client 12] WATCH 31 100  -> 31 snapshot(s), served by pid=12085
+[client 01] WATCH 2 3000  ->  2 snapshot(s), served by pid=18173
+[client 02] WATCH 3 1500  ->  3 snapshot(s), served by pid=18176
+[client 03] WATCH 4 1000  ->  4 snapshot(s), served by pid=18182
+[client 04] WATCH 5 750   ->  5 snapshot(s), served by pid=18179
+[client 05] WATCH 6 600   ->  6 snapshot(s), served by pid=18184
+[client 06] WATCH 7 500   ->  7 snapshot(s), served by pid=18180
+[client 07] WATCH 9 375   ->  9 snapshot(s), served by pid=18181
+[client 08] WATCH 11 300  -> 11 snapshot(s), served by pid=18175
+[client 09] WATCH 13 250  -> 13 snapshot(s), served by pid=18177
+[client 10] WATCH 16 200  -> 16 snapshot(s), served by pid=18174
+[client 11] WATCH 21 150  -> 21 snapshot(s), served by pid=18178
+[client 12] WATCH 31 100  -> 31 snapshot(s), served by pid=18183
 ```
 
 - **ps 證明：** 共 13 個 `./server` 進程（1 個 parent、12 個 child），12 條 ESTABLISHED 連線，server log 出現 `active=12`。
